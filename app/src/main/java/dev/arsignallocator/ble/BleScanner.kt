@@ -1,23 +1,33 @@
 package dev.arsignallocator.ble
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Build
 import dev.arsignallocator.core.ElapsedRealtimeClock
 import dev.arsignallocator.core.MonotonicClock
 import dev.arsignallocator.model.BleObservation
+import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceKey
 import dev.arsignallocator.model.TargetHandle
 import java.util.Locale
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 
 data class ScanPacket(
@@ -36,7 +46,7 @@ class BleScanException(message: String, val errorCode: Int? = null) : Exception(
 
 interface BleScanner {
     fun availability(): BleAvailability
-    fun discover(durationMillis: Long = 12_000L): Flow<ScanPacket>
+    fun discover(durationMillis: Long = 20_000L): Flow<ScanPacket>
     fun track(target: TargetHandle): Flow<ScanPacket>
 }
 
@@ -44,7 +54,8 @@ class AndroidBleScanner(
     context: Context,
     private val clock: MonotonicClock = ElapsedRealtimeClock,
 ) : BleScanner {
-    private val manager = context.applicationContext.getSystemService(BluetoothManager::class.java)
+    private val appContext = context.applicationContext
+    private val manager = appContext.getSystemService(BluetoothManager::class.java)
     private val identityLock = Any()
     private val identities = linkedMapOf<String, DeviceKey>()
 
@@ -58,14 +69,35 @@ class AndroidBleScanner(
 
     override fun discover(durationMillis: Long): Flow<ScanPacket> {
         synchronized(identityLock) { identities.clear() }
-        return scan(target = null, durationMillis = durationMillis, lowLatency = false)
+        val leDuration = if (
+            appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
+        ) {
+            minOf(durationMillis, LE_DISCOVERY_MILLIS)
+        } else {
+            0L
+        }
+        val classicDuration = durationMillis - leDuration
+        return flow {
+            if (leDuration > 0L) {
+                emitAll(scanLe(target = null, durationMillis = leDuration, lowLatency = false))
+            }
+            if (classicDuration > 0L) {
+                emitAll(scanClassic(target = null, durationMillis = classicDuration))
+            }
+        }
     }
 
-    override fun track(target: TargetHandle): Flow<ScanPacket> =
-        scan(target = target, durationMillis = null, lowLatency = true)
+    override fun track(target: TargetHandle): Flow<ScanPacket> = when (target.transport) {
+        BluetoothTransport.CLASSIC -> scanClassic(target = target, durationMillis = null)
+        BluetoothTransport.LOW_ENERGY -> scanLe(
+            target = target,
+            durationMillis = null,
+            lowLatency = true,
+        )
+    }
 
     @SuppressLint("MissingPermission")
-    private fun scan(
+    private fun scanLe(
         target: TargetHandle?,
         durationMillis: Long?,
         lowLatency: Boolean,
@@ -136,7 +168,147 @@ class AndroidBleScanner(
     }
 
     @SuppressLint("MissingPermission")
+    private fun scanClassic(
+        target: TargetHandle?,
+        durationMillis: Long?,
+    ): Flow<ScanPacket> = callbackFlow {
+        val adapter = manager?.adapter
+            ?: throw BleScanException("This phone does not support Bluetooth")
+        if (!adapter.isEnabled) throw BleScanException("Bluetooth is turned off")
+
+        var discoveryStarted = false
+        var restartJob: Job? = null
+        fun beginDiscovery() {
+            try {
+                discoveryStarted = adapter.startDiscovery()
+                if (!discoveryStarted) {
+                    close(BleScanException("Android could not start Bluetooth Classic discovery"))
+                }
+            } catch (error: SecurityException) {
+                close(BleScanException("Bluetooth scan permission is missing"))
+            } catch (error: IllegalStateException) {
+                close(BleScanException(error.message ?: "Bluetooth discovery could not start"))
+            }
+        }
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent) {
+                when (intent.action) {
+                    BluetoothDevice.ACTION_FOUND -> {
+                        val packet = try {
+                            intent.toClassicPacket(target)
+                        } catch (_: SecurityException) {
+                            close(BleScanException("Bluetooth permission was revoked"))
+                            null
+                        }
+                        if (packet != null) {
+                            trySend(packet)
+                        }
+                    }
+
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                        if (!discoveryStarted) return
+                        discoveryStarted = false
+                        if (target == null) {
+                            close()
+                        } else {
+                            restartJob?.cancel()
+                            restartJob = launch {
+                                delay(CLASSIC_RESTART_DELAY_MILLIS)
+                                beginDiscovery()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        try {
+            adapter.cancelDiscovery()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                appContext.registerReceiver(receiver, filter)
+            }
+        } catch (error: SecurityException) {
+            throw BleScanException("Bluetooth scan permission is missing")
+        }
+
+        val startJob = launch {
+            delay(CLASSIC_START_DELAY_MILLIS)
+            beginDiscovery()
+        }
+        val timeout = durationMillis?.let { duration ->
+            launch {
+                delay(duration)
+                close()
+            }
+        }
+
+        awaitClose {
+            startJob.cancel()
+            restartJob?.cancel()
+            timeout?.cancel()
+            runCatching { appContext.unregisterReceiver(receiver) }
+            runCatching { adapter.cancelDiscovery() }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun Intent.toClassicPacket(selected: TargetHandle?): ScanPacket? {
+        val device = bluetoothDevice() ?: return null
+        val rssi = getShortExtra(BluetoothDevice.EXTRA_RSSI, Short.MIN_VALUE).toInt()
+        if (rssi !in -127..20) return null
+        val address = device.address.uppercase(Locale.ROOT)
+        if (selected != null && selected.ephemeralAddress != address) return null
+        val receivedAtNanos = clock.nowNanos()
+        val services = device.uuids.orEmpty().mapTo(linkedSetOf()) { it.uuid.toString() }
+        val key = synchronized(identityLock) {
+            identities.getOrPut(address) {
+                DeviceKey("D${(identities.size + 1).toString().padStart(2, '0')}")
+            }
+        }
+        val transport = selected?.transport ?: BluetoothTransport.CLASSIC
+        val name = getStringExtra(BluetoothDevice.EXTRA_NAME) ?: device.name
+        val handle = selected ?: TargetHandle(
+            key = key,
+            ephemeralAddress = address,
+            advertisedName = name,
+            manufacturerIds = emptySet(),
+            serviceUuids = services,
+            transport = transport,
+        )
+        return ScanPacket(
+            target = handle,
+            observation = BleObservation(
+                observedAtPlatformNanos = receivedAtNanos,
+                receivedAtElapsedNanos = receivedAtNanos,
+                deviceKey = handle.key,
+                rssiDbm = rssi,
+                txPowerDbm = null,
+                advertisedName = name ?: handle.advertisedName,
+                manufacturerIds = handle.manufacturerIds,
+                serviceUuids = services.ifEmpty { handle.serviceUuids },
+                transport = transport,
+            ),
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.bluetoothDevice(): BluetoothDevice? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        } else {
+            getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+        }
+
+    @SuppressLint("MissingPermission")
     private fun ScanResult.toPacket(selected: TargetHandle?): ScanPacket? {
+        if (rssi !in -127..20) return null
         val address = device.address.uppercase(Locale.ROOT)
         if (selected != null && selected.ephemeralAddress != address) return null
 
@@ -157,6 +329,7 @@ class AndroidBleScanner(
             advertisedName = record?.deviceName,
             manufacturerIds = manufacturerIds,
             serviceUuids = services,
+            transport = BluetoothTransport.LOW_ENERGY,
         )
         val txPower = record?.txPowerLevel?.takeUnless { it == Int.MIN_VALUE }
         val observation = BleObservation(
@@ -168,6 +341,7 @@ class AndroidBleScanner(
             advertisedName = record?.deviceName ?: handle.advertisedName,
             manufacturerIds = manufacturerIds.ifEmpty { handle.manufacturerIds },
             serviceUuids = services.ifEmpty { handle.serviceUuids },
+            transport = BluetoothTransport.LOW_ENERGY,
         )
         return ScanPacket(handle, observation)
     }
@@ -179,5 +353,11 @@ class AndroidBleScanner(
         ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED -> "This phone does not support this BLE scan"
         ScanCallback.SCAN_FAILED_INTERNAL_ERROR -> "Android reported an internal Bluetooth error"
         else -> "Bluetooth scan failed (code $code)"
+    }
+
+    private companion object {
+        const val LE_DISCOVERY_MILLIS = 6_000L
+        const val CLASSIC_START_DELAY_MILLIS = 250L
+        const val CLASSIC_RESTART_DELAY_MILLIS = 300L
     }
 }

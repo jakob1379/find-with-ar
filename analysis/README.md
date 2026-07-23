@@ -18,6 +18,7 @@ records. Schema version 1 is documented by the dataclasses and validators in
 simulator.
 
 `ar-signal-replay` emits canonical ordered estimator inputs. Running it twice on
-the same capture must produce byte-identical output; it prefers the Android
-recorder's filtered RSSI/variance fields and uses documented fallbacks for older
-or synthetic version-1 traces.
+the same capture must produce byte-identical output. It prefers the exact
+`estimator_rssi_dbm`, falls back to filtered and then raw RSSI for older traces,
+and reconstructs the phone's horizontal forward vector from the recorded ARCore
+quaternion.

@@ -138,6 +138,7 @@ class ObservationRecord:
     app_monotonic_ns: int
     platform_timestamp_ns: int
     rssi_dbm: int
+    estimator_rssi_dbm: float | None
     tx_power_dbm: int | None
     accepted: bool
     pose: Pose | None
@@ -157,6 +158,7 @@ class ObservationRecord:
             "app_monotonic_ns": self.app_monotonic_ns,
             "platform_timestamp_ns": self.platform_timestamp_ns,
             "rssi_dbm": self.rssi_dbm,
+            "estimator_rssi_dbm": self.estimator_rssi_dbm,
             "tx_power_dbm": self.tx_power_dbm,
             "accepted": self.accepted,
             "rejection_reason": self.rejection_reason,
@@ -291,6 +293,9 @@ def parse_observation(
             "rssi_dbm must be between -127 and 20", source=source, line=line
         )
     tx_power = _optional_integer(value, "tx_power_dbm", source=source, line=line)
+    estimator_rssi = _optional_number(
+        value, "estimator_rssi_dbm", source=source, line=line
+    )
     rejection_reason = _optional_string(value, "rejection_reason", source=source, line=line)
     association_age = _optional_integer(
         value, "pose_association_age_ns", source=source, line=line
@@ -307,6 +312,7 @@ def parse_observation(
         )
     advertisement_raw = value.get("advertisement", {})
     advertisement = _mapping(advertisement_raw, "advertisement", source=source, line=line)
+    _validate_transport(advertisement, "advertisement", source=source, line=line)
 
     return ObservationRecord(
         schema_version=version,
@@ -315,6 +321,7 @@ def parse_observation(
         app_monotonic_ns=app_timestamp,
         platform_timestamp_ns=platform_timestamp,
         rssi_dbm=rssi,
+        estimator_rssi_dbm=estimator_rssi,
         tx_power_dbm=tx_power,
         accepted=accepted,
         pose=pose,
@@ -429,6 +436,7 @@ def _validate_target(value: Any, *, source: Path | None, line: int | None) -> No
     target = _mapping(value, "target", source=source, line=line)
     _required_string(target, "session_key", source=source, line=line)
     _required_string(target, "display_name", source=source, line=line)
+    _validate_transport(target, "target", source=source, line=line)
     manufacturer_ids = target.get("manufacturer_ids", [])
     if (
         not isinstance(manufacturer_ids, list)
@@ -443,6 +451,22 @@ def _validate_target(value: Any, *, source: Path | None, line: int | None) -> No
     ):
         raise TraceValidationError(
             "target.service_uuids must be a string array", source=source, line=line
+        )
+
+
+def _validate_transport(
+    value: Mapping[str, Any],
+    object_name: str,
+    *,
+    source: Path | None,
+    line: int | None,
+) -> None:
+    transport = value.get("transport")
+    if transport is not None and transport not in {"low_energy", "classic"}:
+        raise TraceValidationError(
+            f"{object_name}.transport must be 'low_energy' or 'classic'",
+            source=source,
+            line=line,
         )
 
 

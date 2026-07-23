@@ -40,6 +40,9 @@ def test_android_recorder_contract_is_accepted() -> None:
 
     assert trace.session.session_id == "android-fixture"
     assert trace.session.metadata["target"]["session_key"] == "D01"  # type: ignore[index]
+    assert trace.session.metadata["target"]["transport"] == "classic"  # type: ignore[index]
+    assert trace.observations[0].estimator_rssi_dbm == -61.0
+    assert trace.observations[0].advertisement["transport"] == "classic"
     assert trace.observations[0].advertisement["manufacturer_ids"] == []
 
 
@@ -75,4 +78,16 @@ def test_reports_json_line_number(tmp_path: Path) -> None:
     destination.write_text('{"record_type":"session"}\nnot-json\n')
 
     with pytest.raises(TraceValidationError, match=r"broken\.ndjson:2: invalid JSON"):
+        load_trace(destination)
+
+
+def test_rejects_unknown_bluetooth_transport(tmp_path: Path) -> None:
+    records = [
+        json.loads(line) for line in ANDROID_FIXTURE.read_text().splitlines() if line.strip()
+    ]
+    records[1]["advertisement"]["transport"] = "wifi"
+    destination = tmp_path / "invalid-transport.ndjson"
+    destination.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+
+    with pytest.raises(TraceValidationError, match=r"advertisement\.transport"):
         load_trace(destination)

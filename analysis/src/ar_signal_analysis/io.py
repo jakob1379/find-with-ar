@@ -85,6 +85,7 @@ def observations_frame(trace: Trace) -> pd.DataFrame:
                 "app_monotonic_ns": observation.app_monotonic_ns,
                 "platform_timestamp_ns": observation.platform_timestamp_ns,
                 "rssi_dbm": observation.rssi_dbm,
+                "estimator_rssi_dbm": observation.estimator_rssi_dbm,
                 "tx_power_dbm": observation.tx_power_dbm,
                 "accepted": observation.accepted,
                 "rejection_reason": observation.rejection_reason,

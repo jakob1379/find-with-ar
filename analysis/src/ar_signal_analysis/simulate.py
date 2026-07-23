@@ -111,6 +111,7 @@ def simulate_trace(
             app_monotonic_ns=index * interval_ns,
             platform_timestamp_ns=index * interval_ns,
             rssi_dbm=int(value),
+            estimator_rssi_dbm=float(value),
             tx_power_dbm=round(config.rssi_at_1m_dbm),
             accepted=True,
             pose=Pose(

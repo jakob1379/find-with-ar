@@ -5,6 +5,11 @@ import java.io.File
 @JvmInline
 value class DeviceKey(val value: String)
 
+enum class BluetoothTransport {
+    LOW_ENERGY,
+    CLASSIC,
+}
+
 /** Internal, process-local handle. Its radio address must never be persisted or shown. */
 class TargetHandle internal constructor(
     val key: DeviceKey,
@@ -12,6 +17,7 @@ class TargetHandle internal constructor(
     val advertisedName: String?,
     val manufacturerIds: Set<Int>,
     val serviceUuids: Set<String>,
+    val transport: BluetoothTransport = BluetoothTransport.LOW_ENERGY,
 )
 
 data class BleObservation(
@@ -23,6 +29,7 @@ data class BleObservation(
     val advertisedName: String?,
     val manufacturerIds: Set<Int>,
     val serviceUuids: Set<String>,
+    val transport: BluetoothTransport = BluetoothTransport.LOW_ENERGY,
 )
 
 data class DeviceCandidate(
@@ -34,7 +41,7 @@ data class DeviceCandidate(
 ) {
     val key: DeviceKey get() = handle.key
     val displayName: String get() = handle.advertisedName?.takeIf(String::isNotBlank)
-        ?: "BLE device ${handle.key.value}"
+        ?: "Bluetooth device ${handle.key.value}"
 }
 
 enum class PoseTrackingState { TRACKING, PAUSED, STOPPED }

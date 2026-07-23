@@ -9,6 +9,7 @@ import dev.arsignallocator.core.MonotonicClock
 import dev.arsignallocator.localization.LocationEngine
 import dev.arsignallocator.model.AppScreen
 import dev.arsignallocator.model.ArRuntimeStatus
+import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.DeviceKey
 import dev.arsignallocator.model.LocatorUiState
@@ -87,7 +88,7 @@ class LocatorViewModel(
         when (val availability = scanner.availability()) {
             BleAvailability.Available -> Unit
             BleAvailability.Disabled -> return fail("Bluetooth is turned off")
-            BleAvailability.Unsupported -> return fail("This phone has no Bluetooth LE scanner")
+            BleAvailability.Unsupported -> return fail("This phone does not support Bluetooth scanning")
             is BleAvailability.PermissionDenied -> return fail(availability.detail)
         }
 
@@ -102,7 +103,7 @@ class LocatorViewModel(
                 candidates = emptyList(),
                 selected = null,
                 recoverableError = null,
-                guidance = "Scanning for devices that are advertising now",
+                guidance = "Scanning for nearby Bluetooth devices",
             )
         }
         discoveryJob = viewModelScope.launch {
@@ -121,7 +122,7 @@ class LocatorViewModel(
                     isDiscovering = false,
                     discoverySecondsRemaining = 0,
                     guidance = if (it.candidates.isEmpty()) {
-                        "No advertising BLE device found. Wake the target and retry"
+                        "No observable Bluetooth device found. Wake it, enable pairing mode, and retry"
                     } else {
                         "Select the device you want to locate"
                     },
@@ -292,10 +293,21 @@ class LocatorViewModel(
         if (state.screen != AppScreen.DEVICES && ar.status != ArRuntimeStatus.TRACKING
         ) return ar.detail ?: "AR tracking is unavailable; retry when it recovers"
         val lastSeen = state.metrics.lastSeenElapsedNanos
-        if (lastSeen != null && clock.nowNanos() - lastSeen > TARGET_LOST_NANOS) {
+        val targetLostNanos = if (state.selected?.handle?.transport == BluetoothTransport.CLASSIC) {
+            CLASSIC_TARGET_LOST_NANOS
+        } else {
+            TARGET_LOST_NANOS
+        }
+        if (lastSeen != null && clock.nowNanos() - lastSeen > targetLostNanos) {
             return "Signal lost. Move back toward the last stronger readings"
         }
-        if (state.metrics.receivedCount == 0) return "Waiting for the selected device to advertise"
+        if (state.metrics.receivedCount == 0) {
+            return if (state.selected?.handle?.transport == BluetoothTransport.CLASSIC) {
+                "Waiting for the selected device to answer Bluetooth discovery"
+            } else {
+                "Waiting for the selected device to advertise"
+            }
+        }
         if (state.metrics.acceptedCount < 3 || state.metrics.pathLengthMetres < 1.0) {
             return "Signal found. Move sideways to measure from another position"
         }
@@ -354,7 +366,12 @@ class LocatorViewModel(
         private val readings = ArrayDeque<Pair<Long, Int>>()
 
         fun add(packet: ScanPacket) {
-            if (packet.target.advertisedName != null || handle.advertisedName == null) {
+            val betterTransport = packet.target.transport == BluetoothTransport.LOW_ENERGY &&
+                handle.transport != BluetoothTransport.LOW_ENERGY
+            val betterName = packet.target.transport == handle.transport &&
+                packet.target.advertisedName != null &&
+                handle.advertisedName == null
+            if (betterTransport || betterName) {
                 handle = packet.target
             }
             readings.addLast(packet.observation.receivedAtElapsedNanos to packet.observation.rssiDbm)
@@ -374,16 +391,21 @@ class LocatorViewModel(
                 handle = handle,
                 latestRssiDbm = readings.last().second,
                 medianRssiDbm = median,
-                observationsPerSecond = readings.size / spanSeconds,
+                observationsPerSecond = if (readings.size > 1) {
+                    (readings.size - 1) / spanSeconds
+                } else {
+                    0.0
+                },
                 lastSeenElapsedNanos = readings.last().first.coerceAtMost(nowNanos),
             )
         }
     }
 
     private companion object {
-        const val DISCOVERY_SECONDS = 12
+        const val DISCOVERY_SECONDS = 20
         const val BREADCRUMB_SPACING_METRES = 0.12
         const val TARGET_LOST_NANOS = 5_000_000_000L
+        const val CLASSIC_TARGET_LOST_NANOS = 20_000_000_000L
         const val CANDIDATE_WINDOW_NANOS = 5_000_000_000L
     }
 }

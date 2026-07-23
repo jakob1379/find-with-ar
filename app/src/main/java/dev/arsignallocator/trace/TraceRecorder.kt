@@ -109,8 +109,9 @@ object TraceJsonEncoder {
         field(
             "display_name",
             metadata.target.advertisedName?.takeIf(String::isNotBlank)
-                ?: "BLE device ${metadata.target.key.value}",
+                ?: "Bluetooth device ${metadata.target.key.value}",
         )
+        field("transport", metadata.target.transport.name.lowercase(Locale.ROOT))
         intArrayField("manufacturer_ids", metadata.target.manufacturerIds.sorted())
         stringArrayField("service_uuids", metadata.target.serviceUuids.sorted())
         append("}}")
@@ -130,6 +131,10 @@ object TraceJsonEncoder {
         field("app_monotonic_ns", observation.ble.receivedAtElapsedNanos)
         field("platform_timestamp_ns", observation.ble.observedAtPlatformNanos)
         field("rssi_dbm", observation.ble.rssiDbm)
+        nullableField(
+            "estimator_rssi_dbm",
+            observation.ble.rssiDbm.takeIf { observation.accepted },
+        )
         nullableField("tx_power_dbm", observation.ble.txPowerDbm)
         field("accepted", observation.accepted)
         nullableField("rejection_reason", observation.rejectionReason)
@@ -169,6 +174,7 @@ object TraceJsonEncoder {
         nullableField("rssi_variance_db2", observation.rssiVarianceDb2)
         append(",\"advertisement\":{")
         nullableField("advertised_name", observation.ble.advertisedName, first = true)
+        field("transport", observation.ble.transport.name.lowercase(Locale.ROOT))
         intArrayField("manufacturer_ids", observation.ble.manufacturerIds.sorted())
         stringArrayField("service_uuids", observation.ble.serviceUuids.sorted())
         append('}')
