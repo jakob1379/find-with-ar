@@ -1,0 +1,14 @@
+.android/
+.direnv/
+.gradle/
+.gradle-home/
+.idea/
+.kotlin/
+**/build/
+analysis/.venv/
+analysis/.pytest_cache/
+analysis/**/*.egg-info/
+analysis/**/__pycache__/
+captures/
+local.properties
+*.iml

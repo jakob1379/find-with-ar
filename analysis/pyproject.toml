@@ -1,0 +1,36 @@
+[project]
+name = "ar-signal-analysis"
+version = "0.1.0"
+description = "Offline validation, simulation, and calibration tools for AR Signal Locator traces"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=2.0",
+  "pandas>=2.2",
+]
+
+[project.scripts]
+ar-signal-analyse = "ar_signal_analysis.cli:analyse_entrypoint"
+ar-signal-replay = "ar_signal_analysis.cli:replay_entrypoint"
+ar-signal-simulate = "ar_signal_analysis.cli:simulate_entrypoint"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "ruff>=0.12",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
