@@ -17,19 +17,21 @@ just install
 
 Record the NixOS/Linux version, phone model, Android version and the commit under test. The gate passes only if the checked-in lock files are unchanged after the build.
 
-## 2. BLE and AR concurrency spike
+## 2. Bluetooth and AR concurrency spike
 
-Use an ARCore-supported phone and a controllable beacon advertising at least once per second.
+Use an ARCore-supported phone, a controllable beacon advertising at least once per second and a Bluetooth Classic target that can remain in discoverable/pairing mode.
 
 1. Grant camera, nearby-device and precise-location permissions.
 2. Select the beacon while it is visibly advertising.
 3. Start a capture and walk a varied path for at least 30 seconds and 3 metres.
 4. Confirm AR tracking remains `TRACKING`, then export the NDJSON trace.
 5. Repeat with each headphone or consumer device of interest, both outside and inside its charging case.
+6. Repeat for the Classic target over at least five complete discovery inquiries. Keep it discoverable throughout; record separately whether it remains discoverable while connected.
 
 Pass criteria:
 
 - repeated advertisements continue while AR tracking is active;
+- Classic inquiry results recur while the target remains discoverable;
 - at least 95% of accepted BLE samples have a sufficiently recent valid pose;
 - signal loss produces an explicit state rather than a stale confident estimate;
 - no stable hardware address appears in the exported trace.
@@ -52,7 +54,8 @@ Mark the beacon's ground-truth `x/z` coordinate and collect at least three disti
 - open room and furnished room;
 - floor, table and shelf target heights;
 - line of sight, behind furniture and body occlusion;
-- different phone orientations and, when available, a second handset.
+- different phone orientations and, when available, a second handset;
+- BLE advertising and discoverable Classic transport, with Classic trials long enough to collect the same number of spatially distinct readings.
 
 Hold out complete positions or rooms from tuning. Compare the final estimate against the strongest-RSSI observation from the same trace.
 
@@ -64,7 +67,7 @@ Initial go/no-go targets after about 20–30 seconds are:
 | Furnished-room median horizontal error | at most 2.5 m |
 | Held-out 90th-percentile error | at most 3 m |
 | Nominal 80% region empirical coverage | 70–90% |
-| Time to first useful region | under 15 s at 1 advertisement/s |
+| Time to first useful region | under 15 s at 1 BLE advertisement/s; report Classic separately |
 
 The hybrid estimator must improve on strongest RSSI and must not report high confidence for an uninformative path. If it does not clear that gate, stop feature work and recalibrate the observation model before presenting the AR region as a location.
 

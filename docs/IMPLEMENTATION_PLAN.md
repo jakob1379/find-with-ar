@@ -8,11 +8,11 @@ This table is maintained during implementation. A phase is marked complete only 
 
 | Phase | Status | Evidence / remaining gate |
 | --- | --- | --- |
-| 0 — Toolchain and hardware feasibility | **Implemented; gate open** | Pinned Nix flake, Gradle wrapper, dependency locks/verification metadata and CI are present; clean workspace builds pass. A fresh laptop build and concurrent physical BLE+AR trace remain required. |
-| 1 — BLE discovery and target selection | **Implemented; gate open** | Foreground discovery/tracking, session-local identifiers, metadata, RSSI summaries, timeouts and permission policy compile and pass unit tests. The beacon plus two-consumer-device gate requires a phone. |
+| 0 — Toolchain and hardware feasibility | **Implemented; gate open** | Pinned Nix flake, Gradle wrapper, dependency locks/verification metadata and CI are present; clean workspace builds pass. A fresh laptop build and concurrent physical Bluetooth+AR trace remain required. |
+| 1 — Bluetooth discovery and target selection | **Implemented; gate open** | Sequential BLE scanning and Classic inquiry, channel-specific tracking, session-local identifiers, metadata, RSSI summaries, timeouts and permission policy compile and pass unit tests. Real BLE and discoverable-Classic trials require a phone and targets. |
 | 2 — AR pose capture, synchronization and replay | **Implemented; gate open** | ARCore floor-anchor poses, elapsed-time association, robust bucketing, schema-v1 recording/export and canonical replay are implemented and tested. A marked 30-second walk and the 95% valid-pose gate require a phone. |
-| 3 — Simulator and estimator | **Complete (synthetic gate)** | Eleven deterministic Kotlin tests cover grid/EKF/hybrid behavior, analytic Jacobian, PSD covariance, stationary duplicates, HPD coverage, baseline improvement, replay and reset after inconsistent measurements. |
-| 4 — Real calibration and model selection | **Tooling ready; gate open** | Python simulation, strict trace validation, baseline/error/coverage metrics and calibration gates pass 21 tests. Labelled room captures and held-out results have not been collected. |
+| 3 — Simulator and estimator | **Complete (synthetic gate)** | Deterministic Kotlin tests cover grid/EKF/hybrid behavior, analytic and orientation Jacobians, PSD covariance, robust colocated aggregation, HPD coverage, baseline comparison, replay and reset after inconsistent measurements. |
+| 4 — Real calibration and model selection | **Tooling ready; gate open** | Python simulation, strict trace validation, baseline/error/coverage metrics and calibration gates pass 23 tests. Labelled room captures and held-out results have not been collected. |
 | 5 — Tracking UX and AR overlay | **Implemented; gate open** | Compose discovery/tracking/debug states and camera-projected heat/ellipse overlay build and pass projection/state tests. First-time-user validation requires a phone. |
 | 6 — MVP hardening | **Partially complete** | Lifecycle cancellation, recoverable permission/Bluetooth/AR states, signal-loss reset, local export/delete and backup exclusion are implemented. Ten-minute thermal, repeated physical start/stop and signed internal-release checks remain. |
 
@@ -20,28 +20,28 @@ This table is maintained during implementation. A phase is marked complete only 
 
 - [x] Reproducible Nix/Gradle skeleton
 - [x] Pure Kotlin localization module and deterministic tests
-- [x] Android BLE scanner and permission flow
-- [x] ARCore pose source and BLE/pose synchronization
+- [x] Android BLE and discoverable-Classic scanner with permission flow
+- [x] ARCore pose source and Bluetooth/pose synchronization
 - [x] Versioned local trace recording, export and deterministic replay
 - [x] Compose device picker, tracking/debug UI and AR camera overlay
 - [x] Python simulator, replay and calibration report
 - [x] Static/in-container verification
 - [ ] Fresh Nix build on the development laptop
-- [ ] Physical-phone BLE + AR feasibility trace
+- [ ] Physical-phone Bluetooth + AR feasibility trace
 
 ### Verification evidence — 23 July 2026
 
 - `nix flake check --no-build` evaluated the pinned flake in the prepared workspace. This does not replace the fresh-clone laptop gate.
-- A clean Gradle run completed `:localization:test`, `:app:testDebugUnitTest`, `:app:lintDebug` and `:app:assembleDebug`: 21 tests, zero failures/errors, zero lint errors and five non-blocking warnings.
-- The debug APK is 12,635,270 bytes with SHA-256 `1962acfd4cdf1aa70de0568ff95ae083fe00101701e0ad1948884cfcb3aca3ed`.
-- Python 3.12 lock validation and Ruff passed; Pytest reports 21 passing tests. Canonical replay of the cross-language Android fixture has SHA-256 `2af5050d1752c929c451c6f24b9a7e1223fd560757b2a6ec1dd9667daf3d4f5c`.
+- A clean Gradle run completed `:localization:test`, `:app:testDebugUnitTest`, `:app:lintDebug` and `:app:assembleDebug`: 28 tests, zero failures/errors and zero lint errors.
+- The debug APK is 12,711,198 bytes with SHA-256 `09ec6f305e3246ca5aeecc23abca8205599b86e84187944a96dc160801411def`.
+- Python lock validation and Ruff passed; Pytest reports 23 passing tests. Canonical replay of the cross-language Android fixture has SHA-256 `d3eade42d2f98edd99263bd7df4f8c6d02fe14dce61fca5e1fb0e951d389ef83`.
 - The Gradle 9.4.1 wrapper JAR matches its pinned SHA-256; Maven verification metadata and dependency lock files are committed.
 - Export tests verify that a Bluetooth hardware address used for in-session selection is not serialized. Android backup and device-transfer extraction are disabled.
-- No physical phone, beacon or labelled room was available in this environment. All rows that depend on radio propagation, ARCore tracking, usability, thermal behavior or held-out calibration remain explicitly open.
+- The APK installed and launched on an ARCore-capable OnePlus IN2013 running Android 13. Logs confirmed successful BLE scanner registration and a subsequent Classic `startDiscovery()` call. The phone remained locked, so no AR walk, discoverable-Classic target, labelled-room, usability or thermal gate was completed.
 
 ## 1. MVP outcome
 
-Build an Android application that finds a **stationary, actively advertising BLE device within one room**. The user selects a device, walks around with the camera open, and receives:
+Build an Android application that finds a **stationary Bluetooth device observable through BLE advertising or Bluetooth Classic discovery within one room**. The user selects a device, walks around with the camera open, and receives:
 
 - an AR indication of the most likely ground-projected location;
 - an uncertainty region rather than a falsely precise arrow;
@@ -52,26 +52,26 @@ The MVP is successful if it demonstrates that combining BLE RSSI with ARCore cam
 
 ### Explicitly out of scope
 
-- Wi-Fi, Bluetooth Classic, arbitrary radio signals, UWB and background scanning;
-- devices that are asleep, inside a radio-blocking case, or not advertising;
+- Wi-Fi, arbitrary radio signals, UWB and background scanning;
+- BLE devices that are asleep or not advertising, and Classic devices that are not discoverable;
 - crowd-sourced finding outside Bluetooth range;
 - moving targets, multi-room navigation and iOS;
 - accounts, cloud services, maps or a backend.
 
-Keeping this boundary is important: BLE + AR localization is the experiment. Everything else can wait until it is shown to work.
+Keeping this boundary is important: RSSI + AR localization is the experiment. Everything else can wait until it is shown to work.
 
 ## 2. Core decisions
 
 | Area | MVP decision | Reason |
 | --- | --- | --- |
-| Platform | Native Android, Kotlin | Best access to BLE scan timestamps, ARCore and low-level diagnostics |
+| Platform | Native Android, Kotlin | Best access to Bluetooth callbacks, ARCore and low-level diagnostics |
 | UI | Jetpack Compose around an ARCore rendering surface | Simple state-driven UI without adopting a large 3D engine |
-| Radio | BLE advertisements only | Continuously observable RSSI on commodity phones |
+| Radio | BLE advertisements plus discoverable Classic inquiry | BLE provides frequent samples; Classic expands compatibility but is slower and cannot observe arbitrary connected/non-discoverable devices |
 | Spatial model | 2D horizontal `x/z` position relative to an ARCore floor anchor, marginalizing several target-height hypotheses | The useful answer is normally an area on the floor plan; height is weakly observable |
 | Estimator | Bayesian grid acquisition, then a validated EKF refinement | Represents early multimodality, then optionally provides fast recursive mean and covariance updates |
 | Persistence | Local versioned JSONL/CSV capture files | Enables deterministic replay and Python analysis before choosing model constants |
 | Backend | None | Finding must work offline and the measurements are sensitive location-adjacent data |
-| Test hardware | A physical ARCore-supported Android phone plus a controllable BLE beacon | Emulators cannot reproduce the real BLE/indoor-multipath problem |
+| Test hardware | A physical ARCore-supported Android phone, a controllable BLE beacon and a discoverable Classic target | Emulators cannot reproduce indoor radio propagation or real inquiry behavior |
 
 ## 3. Why not use only a conventional Kalman filter?
 
@@ -95,14 +95,14 @@ $$
 where $(s_x,s_z)$ is the target's horizontal position, $A$ is expected RSSI at 1 metre, and $n$ is the environmental path-loss exponent. For phone position $\mathbf{p}_k=(p_{x,k},p_{z,k})$, the observation model is:
 
 $$
-z_k = A - 10n\log_{10}\left(\max(d_k,d_{\min}) / 1\text{ m}\right) + v_k
+z_k = A - 10n\log_{10}\left(\max(d_k,d_{\min}) / 1\text{ m}\right) + b_k + v_k
 $$
 
 $$
 d_k = \sqrt{(s_x-p_{x,k})^2 + (s_z-p_{z,k})^2}
 $$
 
-The transition is approximately identity because the target is assumed stationary. Position gets very small process noise; $A$ and $n$ get slightly more so that the model can adapt to orientation and environmental changes.
+The directional term $b_k$ applies a bounded attenuation when the target is behind the phone's ARCore-derived forward direction, approximating body shadowing. The transition is approximately identity because the target is assumed stationary. Position gets very small process noise; $A$ and $n$ get slightly more so that the model can adapt to environmental changes.
 
 During acquisition, display a highest-posterior-density (HPD) region from the grid and report its cell-count area. Do not display the posterior mean when it falls between two likely regions. Once one connected component contains most of the posterior mass—for example, more than 80%—the position block $P_{xz}$ of an initialized EKF can produce an ellipse. For confidence level $c$, the ellipse is:
 
@@ -122,7 +122,7 @@ This area is only labelled as a calibrated confidence region after real-world co
 
 ```mermaid
 flowchart TD
-    BLE["BLE scanner"] --> SYNC["Sample synchronizer"]
+    BT["BLE scan / Classic inquiry"] --> SYNC["Sample synchronizer"]
     AR["ARCore pose source"] --> SYNC
     SYNC --> REC["Session recorder"]
     SYNC --> LOC["Localization engine"]
@@ -163,7 +163,7 @@ data class LocationEstimate(
 )
 ```
 
-`ScanResult.getTimestampNanos()` is time-since-boot, while ARCore explicitly leaves the time base of `Frame.getTimestamp()` undefined. Do not assume they are directly interchangeable. Timestamp both callbacks with `SystemClock.elapsedRealtimeNanos()`, retain the platform timestamps for diagnostics, and associate each BLE observation with the nearest recently processed AR pose. Quantify callback latency during the capture milestone. Keep poses and estimates relative to a floor anchor so that ARCore world-coordinate adjustments do not invalidate the session.
+`ScanResult.getTimestampNanos()` is time-since-boot, while ARCore explicitly leaves the time base of `Frame.getTimestamp()` undefined. Do not assume they are directly interchangeable. Timestamp all callbacks with `SystemClock.elapsedRealtimeNanos()`, retain available platform timestamps for diagnostics, and associate each Bluetooth observation with the nearest recently processed AR pose. Classic inquiry results have no radio timestamp, so record their callback time in both timestamp fields. Quantify callback latency during the capture milestone. Keep poses and estimates relative to a floor anchor so that ARCore world-coordinate adjustments do not invalidate the session.
 
 ### Suggested project layout
 
@@ -253,7 +253,7 @@ Wrap these in `just check`, `just install`, `just capture` and `just analyse` af
 - `adb` detects the physical test phone and installs the APK.
 - CI runs the same headless commands from the flake.
 
-The emulator is useful for Compose/UI tests but is not an acceptance environment for combined AR + BLE localization. Make the app **AR Required** with `minSdk = 24`, `compileSdk = 37` and `targetSdk = 37`; runtime availability/install checks are still required. On NixOS, give the development user KVM access for the emulator and enable ADB USB access where the system version does not provide automatic `uaccess`. The SDK is immutable in `/nix/store`: missing components are added declaratively to the flake, never installed by Android Studio. Google supplies Linux Android tooling primarily for x86-64, so an ARM Linux workstation would need a separate decision rather than pretending the same shell is portable.
+The emulator is useful for Compose/UI tests but is not an acceptance environment for combined AR + Bluetooth localization. Make the app **AR Required** with `minSdk = 24`, `compileSdk = 37` and `targetSdk = 37`; runtime availability/install checks are still required. On NixOS, give the development user KVM access for the emulator and enable ADB USB access where the system version does not provide automatic `uaccess`. The SDK is immutable in `/nix/store`: missing components are added declaratively to the flake, never installed by Android Studio. Google supplies Linux Android tooling primarily for x86-64, so an ARM Linux workstation would need a separate decision rather than pretending the same shell is portable.
 
 ## 6. Phased implementation
 
@@ -267,19 +267,19 @@ Deliverables:
 - Python/uv analysis project;
 - CI running Nix-based lint, Kotlin unit tests and Python tests.
 
-Before estimator work, verify on the physical target phone that the app can run ARCore tracking and a foreground BLE scan simultaneously. Record a 30-second `(time, pose, RSSI)` trace for a controllable beacon and for the headphones/devices we actually want to find, including the behaviour inside their charging case.
+Before estimator work, verify on the physical target phone that the app can run ARCore tracking and foreground Bluetooth scanning simultaneously. Record a 30-second `(time, pose, RSSI)` trace for a controllable beacon and longer traces for discoverable Classic targets and the headphones/devices we actually want to find, including the behaviour inside their charging case.
 
-Gate: all environment acceptance checks above pass on a fresh clone, and at least one relevant target emits repeated advertisements throughout a walking session while ARCore remains in `TRACKING` state.
+Gate: all environment acceptance checks above pass on a fresh clone, and at least one relevant BLE target plus one discoverable Classic target yield repeated readings throughout a walking session while ARCore remains in `TRACKING` state.
 
-### Phase 1 — BLE discovery and target selection (1–2 days)
+### Phase 1 — Bluetooth discovery and target selection (1–2 days)
 
-Implement a foreground `BleScanner` using `BluetoothLeScanner` and expose observations as a cold `Flow`/`callbackFlow`. Discovery is time-limited; after selection use `SCAN_MODE_LOW_LATENCY` only while the find screen is visible. The scan screen displays:
+Implement a foreground scanner using `BluetoothLeScanner`, followed sequentially by `BluetoothAdapter.startDiscovery()`, and expose observations as a cold `Flow`/`callbackFlow`. Android forbids running the dedicated BLE and Classic discovery APIs concurrently. Discovery is time-limited; after selection use low-latency BLE scanning or repeated full Classic inquiries only while the find screen is visible. The scan screen displays:
 
 - advertised name when available;
 - session-local identifier;
 - manufacturer/service identifiers;
 - live and short-window median RSSI;
-- last-seen age and advertising frequency.
+- last-seen age and observation frequency.
 
 Permissions:
 
@@ -288,13 +288,13 @@ Permissions:
 - `ACCESS_FINE_LOCATION`, because this app explicitly derives physical location from scan results and therefore must not claim `neverForLocation`;
 - runtime permission rationale in plain language.
 
-Do not promise support for every paired headphone. A device is selectable only while the app actually observes suitable advertisements.
+Do not promise support for every paired headphone. A device is selectable only while the app actually observes a BLE advertisement or a Classic inquiry result. Classic inquiry is slow, affects active Bluetooth connections and requires the target to remain discoverable.
 
-Gate: select and continuously observe a dedicated test beacon and at least two real consumer devices, with correct signal-loss/timeout behaviour.
+Gate: select and continuously observe a dedicated test beacon, a discoverable Classic target and at least two real consumer devices, with correct signal-loss/timeout behaviour.
 
 ### Phase 2 — AR pose capture, synchronization and replay (1–3 days)
 
-Implement an ARCore session and stream camera pose only while tracking state is valid. Join BLE readings to recent poses, aggregate highly correlated readings, and write a versioned session log containing:
+Implement an ARCore session and stream camera pose only while tracking state is valid. Join Bluetooth readings to recent poses, aggregate highly correlated readings, and write a versioned session log containing:
 
 - both platform and app monotonic timestamps;
 - raw RSSI, advertised Tx power and identifying advertisement fields;
@@ -302,9 +302,9 @@ Implement an ARCore session and stream camera pose only while tracking state is 
 - phone/device model and app/schema versions;
 - estimator inputs and outputs.
 
-Initial aggregation rule: a robust median/MAD window, followed by at most one estimator update per small spatial/time bucket. Repeated readings at the same position may refine signal noise, but must not create the illusion of new spatial information.
+Initial aggregation rule: keep a robust median window for display and diagnostics, accept at most three raw readings per small spatial bucket, then combine them into one robust median/MAD likelihood term. Repeated readings at the same position may refine signal noise, but must not create the illusion of new spatial information. The estimator must use each accepted packet's raw RSSI; applying the rolling window across changing positions to either RSSI or noise variance would attach distance trends to the wrong statistical role.
 
-Gate: walk a marked path, export/replay it, and reproduce an identical ordered estimator input stream. At least 95% of accepted BLE samples must have a valid, sufficiently recent pose.
+Gate: walk a marked path, export/replay it, and reproduce an identical ordered estimator input stream. At least 95% of accepted Bluetooth samples must have a valid, sufficiently recent pose.
 
 ### Phase 3 — Synthetic simulator and estimator baseline (2–4 days)
 
@@ -393,7 +393,7 @@ The app should log and expose these metrics per session:
 - EKF innovation, normalized innovation squared and residual variance;
 - covariance eigenvalues and displayed ellipse area;
 - estimate error when ground truth is supplied in benchmark mode;
-- AR tracking losses and BLE-to-pose association age.
+- AR tracking losses and Bluetooth-to-pose association age.
 
 Confidence must depend on residual fit **and** observation geometry. A small covariance alone is not enough.
 
@@ -401,13 +401,14 @@ Confidence must depend on residual fit **and** observation geometry. A small cov
 
 | Risk | Consequence | Mitigation / decision gate |
 | --- | --- | --- |
-| RSSI multipath and body shadowing | Biased or jumping estimates | Robust aggregation, adaptive noise, innovation gating, real-room calibration |
+| RSSI multipath and body shadowing | Biased or jumping estimates | ARCore-orientation body-shadow term, robust aggregation, adaptive noise, innovation gating, real-room calibration |
 | Unknown Tx power and path-loss exponent | Distance/location ambiguity | Estimate $A$ and $n$, use broad priors, require spatially diverse path |
 | Early posterior is multimodal | EKF locks onto wrong location | Grid initializer and explicit collecting state |
 | Repeated correlated packets | False covariance shrinkage | Spatial/time bucketing and measurement-noise floor |
 | AR drift or tracking loss | Samples get wrong coordinates | Reject invalid tracking, monitor resets, keep sessions short |
 | BLE identity rotation | Selected target disappears or changes identity | Use service/manufacturer payload fingerprint where possible; document session-local limitation |
 | Headphones stop advertising | Device cannot be found | Detect and explain; validate supported-device behaviour before marketing claims |
+| Classic target is not discoverable | Android supplies no inquiry RSSI | Require pairing/discoverable mode; do not imply that bonded or connected status is sufficient |
 | Device actually moves | Stationary model becomes invalid | Innovation test and reset/“target may be moving” state |
 | Confidence is numerically precise but wrong | Misleading product | Held-out coverage calibration is a release gate |
 
@@ -416,20 +417,20 @@ Confidence must depend on residual fit **and** observation geometry. A small cov
 The MVP is done when:
 
 - a fresh Nix environment builds and tests the application;
-- the app finds and selects actively advertising BLE devices;
+- the app finds and selects actively advertising BLE or discoverable Classic devices;
 - every estimator input can be captured, exported and deterministically replayed;
 - the estimator produces a location region plus uncertainty from AR-tagged measurements;
 - held-out physical experiments show improvement over a normal RSSI meter;
 - the UI withholds or broadens results when evidence is weak;
 - all operation is foreground-only and local to the phone;
-- limitations are explicit: BLE advertising, stationary target, nearby/single-room search.
+- limitations are explicit: observable radio, stationary target, nearby/single-room search.
 
 ## 10. Follow-on backlog, only after the MVP gate
 
 1. 2.5D target-height hypotheses and AR occlusion/depth.
 2. Active next-best-view guidance using expected information gain.
 3. Per-phone/per-device calibration profiles.
-4. Support for connected BLE devices and carefully scoped Bluetooth Classic experiments.
+4. Device-specific telemetry for connected or non-discoverable targets where a documented API exists.
 5. UWB adapters for genuine range/direction on compatible hardware.
 6. iOS BLE parity; do not plan cross-platform Wi-Fi scanning because iOS lacks a general-purpose API.
 7. Optional Wi-Fi access-point mode on Android, recognising platform scan throttling.
@@ -437,6 +438,7 @@ The MVP is done when:
 ## Primary references
 
 - [Android BLE overview](https://developer.android.com/develop/connectivity/bluetooth/ble/ble-overview)
+- [Android Classic device discovery](https://developer.android.com/develop/connectivity/bluetooth/find-bluetooth-devices)
 - [Android Bluetooth permissions](https://developer.android.com/develop/connectivity/bluetooth/bt-permissions)
 - [Android `ScanResult` timestamp and RSSI API](https://developer.android.com/reference/android/bluetooth/le/ScanResult)
 - [ARCore session configuration](https://developers.google.com/ar/develop/java/session-config)
