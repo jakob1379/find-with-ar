@@ -35,6 +35,7 @@ import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.atan2
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -53,10 +54,21 @@ data class NormalizedScreenPoint(val x: Float, val y: Float)
 class ArProjectionSnapshot internal constructor(
     private val clipFromAnchor: FloatArray,
     val updatedAtElapsedNanos: Long,
+    val cameraPose: PoseObservation? = null,
 ) {
     init {
         require(clipFromAnchor.size == 16)
     }
+
+    val cameraHeadingDegrees: Float?
+        get() = cameraPose?.let { pose ->
+            Math.toDegrees(
+                atan2(
+                    -2.0 * (pose.qx * pose.qz + pose.qw * pose.qy),
+                    1.0 - 2.0 * (pose.qx * pose.qx + pose.qy * pose.qy),
+                ),
+            ).toFloat()
+        }
 
     fun project(xMetres: Double, yMetres: Double, zMetres: Double): NormalizedScreenPoint? {
         val x = xMetres.toFloat()
@@ -304,21 +316,20 @@ class ArCorePoseSource(
             val translation = relative.translation
             val rotation = relative.rotationQuaternion
             val receivedAtElapsedNanos = clock.nowNanos()
-            publishProjection(camera, anchor, receivedAtElapsedNanos)
-            _poses.tryEmit(
-                PoseObservation(
-                    capturedAtPlatformNanos = frame.timestamp,
-                    receivedAtElapsedNanos = receivedAtElapsedNanos,
-                    xMetres = translation[0].toDouble(),
-                    yMetres = translation[1].toDouble(),
-                    zMetres = translation[2].toDouble(),
-                    qx = rotation[0].toDouble(),
-                    qy = rotation[1].toDouble(),
-                    qz = rotation[2].toDouble(),
-                    qw = rotation[3].toDouble(),
-                    trackingState = PoseTrackingState.TRACKING,
-                ),
+            val observation = PoseObservation(
+                capturedAtPlatformNanos = frame.timestamp,
+                receivedAtElapsedNanos = receivedAtElapsedNanos,
+                xMetres = translation[0].toDouble(),
+                yMetres = translation[1].toDouble(),
+                zMetres = translation[2].toDouble(),
+                qx = rotation[0].toDouble(),
+                qy = rotation[1].toDouble(),
+                qz = rotation[2].toDouble(),
+                qw = rotation[3].toDouble(),
+                trackingState = PoseTrackingState.TRACKING,
             )
+            publishProjection(camera, anchor, observation)
+            _poses.tryEmit(observation)
             if (_status.value.status != ArRuntimeStatus.TRACKING) {
                 _status.value = ArStatus(ArRuntimeStatus.TRACKING, "AR tracking is stable")
             }
@@ -351,7 +362,8 @@ class ArCorePoseSource(
         )
     }
 
-    private fun publishProjection(camera: Camera, anchor: Anchor, observedAtNanos: Long) {
+    private fun publishProjection(camera: Camera, anchor: Anchor, pose: PoseObservation) {
+        val observedAtNanos = pose.receivedAtElapsedNanos
         if (observedAtNanos - lastProjectionPublishedNanos < PROJECTION_INTERVAL_NANOS) return
         val anchorToWorld = FloatArray(16)
         val viewFromWorld = FloatArray(16)
@@ -364,7 +376,7 @@ class ArCorePoseSource(
         Matrix.multiplyMM(viewFromAnchor, 0, viewFromWorld, 0, anchorToWorld, 0)
         Matrix.multiplyMM(clipFromAnchor, 0, clipFromView, 0, viewFromAnchor, 0)
         lastProjectionPublishedNanos = observedAtNanos
-        _projection.value = ArProjectionSnapshot(clipFromAnchor, observedAtNanos)
+        _projection.value = ArProjectionSnapshot(clipFromAnchor, observedAtNanos, pose)
     }
 
     private fun findFloorAnchor(activeSession: Session, cameraPose: Pose): Anchor? {
