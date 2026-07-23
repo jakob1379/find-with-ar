@@ -4,6 +4,8 @@
 .gradle-home/
 .idea/
 .kotlin/
+.pytest_cache/
+.ruff_cache/
 **/build/
 analysis/.venv/
 analysis/.pytest_cache/
