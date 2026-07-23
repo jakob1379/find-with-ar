@@ -4,9 +4,7 @@ import dev.arsignallocator.model.BleObservation
 import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
 import dev.arsignallocator.model.SynchronizedObservation
-import kotlin.math.abs
 import kotlin.math.floor
-import kotlin.math.pow
 
 data class SynchronizerConfig(
     val maximumPoseAgeNanos: Long = 250_000_000L,
@@ -14,7 +12,17 @@ data class SynchronizerConfig(
     val rssiWindowSize: Int = 7,
     val spatialBucketMetres: Double = 0.25,
     val minimumRssiVarianceDb2: Double = 9.0,
-)
+    val maxAcceptedSamplesPerSpatialBucket: Int = 3,
+) {
+    init {
+        require(maximumPoseAgeNanos >= 0L)
+        require(retainedPoseDurationNanos >= maximumPoseAgeNanos)
+        require(rssiWindowSize > 0)
+        require(spatialBucketMetres > 0.0)
+        require(minimumRssiVarianceDb2 > 0.0)
+        require(maxAcceptedSamplesPerSpatialBucket > 0)
+    }
+}
 
 /**
  * Joins observations in the app's monotonic clock domain. ARCore's Frame timestamp is retained
@@ -25,7 +33,7 @@ class SampleSynchronizer(
 ) {
     private val poses = ArrayDeque<PoseObservation>()
     private val rssiWindow = ArrayDeque<Int>()
-    private val consumedSpatialBuckets = mutableSetOf<Pair<Int, Int>>()
+    private val acceptedSamplesBySpatialBucket = mutableMapOf<Pair<Int, Int>, Int>()
 
     @Synchronized
     fun addPose(pose: PoseObservation) {
@@ -48,8 +56,10 @@ class SampleSynchronizer(
             absoluteDifference(it.receivedAtElapsedNanos, ble.receivedAtElapsedNanos)
         }
         val robustMedian = median(rssiWindow.map(Int::toDouble))
-        val mad = median(rssiWindow.map { abs(it - robustMedian) })
-        val variance = ((1.4826 * mad).pow(2)).coerceAtLeast(config.minimumRssiVarianceDb2)
+        // A rolling window crosses phone positions, so its RSSI trend is signal rather than
+        // measurement noise. The localization aggregator estimates scatter within each
+        // spatial bucket; this value is only the per-packet sensor-noise floor.
+        val variance = config.minimumRssiVarianceDb2
 
         if (pose == null || age == null || age > config.maximumPoseAgeNanos) {
             return rejected(ble, pose, age, "no_recent_pose", robustMedian, variance)
@@ -59,9 +69,11 @@ class SampleSynchronizer(
         }
 
         val bucket = spatialBucket(pose)
-        if (!consumedSpatialBuckets.add(bucket)) {
+        val acceptedInBucket = acceptedSamplesBySpatialBucket.getOrDefault(bucket, 0)
+        if (acceptedInBucket >= config.maxAcceptedSamplesPerSpatialBucket) {
             return rejected(ble, pose, age, "correlated_spatial_bucket", robustMedian, variance)
         }
+        acceptedSamplesBySpatialBucket[bucket] = acceptedInBucket + 1
 
         return SynchronizedObservation(
             ble = ble,
@@ -78,7 +90,7 @@ class SampleSynchronizer(
     fun reset() {
         poses.clear()
         rssiWindow.clear()
-        consumedSpatialBuckets.clear()
+        acceptedSamplesBySpatialBucket.clear()
     }
 
     private fun spatialBucket(pose: PoseObservation): Pair<Int, Int> =

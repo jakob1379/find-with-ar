@@ -80,12 +80,16 @@ data class SpatialRssiSample(
     val rssiDbm: Double,
     val measurementVarianceDb2: Double = 9.0,
     val elapsedRealtimeNanos: Long = 0L,
+    val phoneForward: Vec2? = null,
 ) {
     init {
         require(phoneHeightM.isFinite()) { "Phone height must be finite" }
         require(rssiDbm.isFinite()) { "RSSI must be finite" }
         require(measurementVarianceDb2.isFinite() && measurementVarianceDb2 > 0.0) {
             "Measurement variance must be finite and positive"
+        }
+        require(phoneForward == null || phoneForward.squaredDistanceTo(Vec2(0.0, 0.0)) > 1e-12) {
+            "Phone forward vector must be non-zero"
         }
     }
 }

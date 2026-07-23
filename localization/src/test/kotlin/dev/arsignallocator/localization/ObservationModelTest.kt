@@ -11,11 +11,13 @@ class ObservationModelTest {
             phonePosition = Vec2(-0.4, 1.1),
             phoneHeightM = 1.15,
             rssiDbm = -62.0,
+            phoneForward = Vec2(-0.8, -0.6),
         )
         val analytic = RssiObservationModel.predictAndJacobian(
             state,
             sample,
             targetHeightM = 0.2,
+            bodyShadowAttenuationDb = 6.0,
         ).jacobian
         val step = 1e-6
 
@@ -23,8 +25,18 @@ class ObservationModelTest {
             val above = state.copyOf().also { it[index] += step }
             val below = state.copyOf().also { it[index] -= step }
             val numerical = (
-                RssiObservationModel.predictAndJacobian(above, sample, 0.2).rssiDbm -
-                    RssiObservationModel.predictAndJacobian(below, sample, 0.2).rssiDbm
+                RssiObservationModel.predictAndJacobian(
+                    above,
+                    sample,
+                    0.2,
+                    bodyShadowAttenuationDb = 6.0,
+                ).rssiDbm -
+                    RssiObservationModel.predictAndJacobian(
+                        below,
+                        sample,
+                        0.2,
+                        bodyShadowAttenuationDb = 6.0,
+                    ).rssiDbm
                 ) / (2.0 * step)
             assertEquals("state index $index", numerical, analytic[index], 2e-6)
         }

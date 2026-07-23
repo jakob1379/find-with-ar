@@ -1,6 +1,7 @@
 package dev.arsignallocator.localization
 
 import kotlin.math.floor
+import kotlin.math.hypot
 import kotlin.math.max
 
 object RobustStatistics {
@@ -30,6 +31,7 @@ data class AggregatedSpatialRssiSample(
     val measurementVarianceDb2: Double,
     val rawSampleCount: Int,
     val latestElapsedRealtimeNanos: Long,
+    val phoneForward: Vec2?,
 )
 
 /**
@@ -95,6 +97,16 @@ class SpatialRssiAggregator(
             ),
             rawSampleCount = samples.size,
             latestElapsedRealtimeNanos = samples.maxOf(SpatialRssiSample::elapsedRealtimeNanos),
+            phoneForward = aggregateForward(samples),
         )
+    }
+
+    private fun aggregateForward(samples: List<SpatialRssiSample>): Vec2? {
+        val forwards = samples.mapNotNull(SpatialRssiSample::phoneForward)
+        if (forwards.isEmpty()) return null
+        val x = RobustStatistics.median(forwards.map(Vec2::x))
+        val z = RobustStatistics.median(forwards.map(Vec2::z))
+        val length = hypot(x, z)
+        return if (length > 1e-6) Vec2(x / length, z / length) else null
     }
 }

@@ -36,16 +36,20 @@ class SampleSynchronizerTest {
     }
 
     @Test
-    fun `duplicate stationary packets do not create estimator information`() {
+    fun `allows three colocated readings then caps correlated input`() {
         val synchronizer = SampleSynchronizer()
         synchronizer.addPose(pose(at = 1_000_000_000L, x = 0.02))
         val first = synchronizer.synchronize(ble(at = 1_010_000_000L, rssi = -62))
-        val duplicate = synchronizer.synchronize(ble(at = 1_020_000_000L, rssi = -58))
+        val second = synchronizer.synchronize(ble(at = 1_020_000_000L, rssi = -58))
+        val third = synchronizer.synchronize(ble(at = 1_030_000_000L, rssi = -60))
+        val duplicate = synchronizer.synchronize(ble(at = 1_040_000_000L, rssi = -57))
 
         assertTrue(first.accepted)
+        assertTrue(second.accepted)
+        assertTrue(third.accepted)
         assertFalse(duplicate.accepted)
         assertEquals("correlated_spatial_bucket", duplicate.rejectionReason)
-        assertTrue(duplicate.rssiVarianceDb2!! >= 9.0)
+        assertEquals(9.0, duplicate.rssiVarianceDb2!!, 0.0)
     }
 
     @Test

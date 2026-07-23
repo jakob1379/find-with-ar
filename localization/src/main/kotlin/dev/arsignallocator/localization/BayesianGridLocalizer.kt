@@ -13,18 +13,21 @@ data class GridConfig(
     val maxX: Double = 5.0,
     val minZ: Double = -5.0,
     val maxZ: Double = 5.0,
-    val resolutionM: Double = 0.25,
-    val referenceRssiHypothesesDbm: List<Double> = listOf(-48.0, -55.0, -62.0),
-    val pathLossExponentHypotheses: List<Double> = listOf(1.6, 2.2, 3.0),
-    val targetHeightHypothesesM: List<Double> = listOf(0.05, 0.6, 1.1),
-    val modelSigmaDb: Double = 3.0,
-    val studentTDegreesOfFreedom: Double = 4.0,
+    val resolutionM: Double = 0.30,
+    val referenceRssiHypothesesDbm: List<Double> = listOf(-66.0, -58.0, -50.0, -42.0),
+    val pathLossExponentHypotheses: List<Double> = listOf(1.4, 2.2, 3.0, 3.8),
+    val targetHeightHypothesesM: List<Double> = listOf(0.05, 0.6, 1.15),
+    val modelSigmaDb: Double = 4.0,
+    val minimumMeasurementVarianceDb2: Double = 1.0,
+    val studentTDegreesOfFreedom: Double = 3.0,
     val minDistanceM: Double = 0.15,
     val spatialBucketSizeM: Double = 0.35,
     val dominantModeFraction: Double = 0.80,
     val minSpatialBucketsForInitialization: Int = 5,
     val minPositionBaselineM: Double = 1.25,
     val minMinorAxisSpreadM: Double = 0.12,
+    val bodyShadowAttenuationDb: Double = 6.0,
+    val maxLocatedAreaSquareMetres: Double = 8.0,
 ) {
     init {
         require(minX < maxX && minZ < maxZ)
@@ -33,12 +36,15 @@ data class GridConfig(
         require(pathLossExponentHypotheses.isNotEmpty() && pathLossExponentHypotheses.all { it > 0.0 })
         require(targetHeightHypothesesM.isNotEmpty() && targetHeightHypothesesM.all { it.isFinite() })
         require(modelSigmaDb > 0.0)
+        require(minimumMeasurementVarianceDb2 > 0.0)
         require(studentTDegreesOfFreedom > 0.0)
         require(minDistanceM > 0.0)
         require(spatialBucketSizeM > 0.0)
         require(dominantModeFraction in 0.5..1.0)
         require(minSpatialBucketsForInitialization >= 2)
         require(minPositionBaselineM >= 0.0 && minMinorAxisSpreadM >= 0.0)
+        require(bodyShadowAttenuationDb >= 0.0)
+        require(maxLocatedAreaSquareMetres > 0.0)
     }
 }
 
@@ -56,6 +62,7 @@ data class EkfInitialization(
     val targetHeightM: Double,
     /** Buckets already represented by the grid posterior; EKF must not count them twice. */
     val observedPhonePositions: List<Vec2> = emptyList(),
+    val bodyShadowAttenuationDb: Double = 0.0,
 ) {
     init {
         require(state.size == 4)
@@ -87,7 +94,7 @@ class BayesianGridLocalizer(
     }
     private val aggregator = SpatialRssiAggregator(
         bucketSizeM = config.spatialBucketSizeM,
-        minVarianceDb2 = config.modelSigmaDb * config.modelSigmaDb,
+        minVarianceDb2 = config.minimumMeasurementVarianceDb2,
     )
 
     private var latest = emptyEstimate()
@@ -196,8 +203,11 @@ class BayesianGridLocalizer(
 
         val quality = dataQuality(observations)
         val dominant = components.firstOrNull()
-        val isUnimodal = quality.hasInformativeGeometry && dominant != null &&
+        val hasDominantMode = dominant != null &&
             dominant.mass / hpd90.enclosedProbability >= config.dominantModeFraction
+        val isUnimodal = quality.hasInformativeGeometry &&
+            hasDominantMode &&
+            hpd90.areaSquareMetres <= config.maxLocatedAreaSquareMetres
         val moments = if (isUnimodal) positionMoments(dominant.indices, marginal) else null
 
         latestInitialization = if (isUnimodal) {
@@ -217,6 +227,7 @@ class BayesianGridLocalizer(
             state = when {
                 !quality.hasInformativeGeometry -> EstimateState.COLLECTING
                 isUnimodal -> EstimateState.GRID_UNIMODAL
+                hasDominantMode -> EstimateState.COLLECTING
                 else -> EstimateState.GRID_MULTIMODAL
             },
             dataQuality = quality,
@@ -231,7 +242,14 @@ class BayesianGridLocalizer(
         val horizontalSquared = target.squaredDistanceTo(observation.phonePosition)
         val heightDelta = hypothesis.targetHeightM - observation.phoneHeightM
         val distance = max(config.minDistanceM, sqrt(horizontalSquared + heightDelta * heightDelta))
-        return hypothesis.referenceRssiDbm - 10.0 * hypothesis.pathLossExponent * log10(distance)
+        return hypothesis.referenceRssiDbm -
+            10.0 * hypothesis.pathLossExponent * log10(distance) +
+            directionalRssiAdjustment(
+                target = target,
+                phone = observation.phonePosition,
+                phoneForward = observation.phoneForward,
+                maximumAttenuationDb = config.bodyShadowAttenuationDb,
+            ).rssiDb
     }
 
     private fun hpdRegion(level: Double, marginal: DoubleArray): HpdRegion {
@@ -382,6 +400,7 @@ class BayesianGridLocalizer(
             covariance = projectSymmetricPsd(covariance),
             targetHeightM = meanHeight,
             observedPhonePositions = observations.map { it.phonePosition },
+            bodyShadowAttenuationDb = config.bodyShadowAttenuationDb,
         )
     }
 
@@ -458,6 +477,7 @@ class BayesianGridLocalizer(
         covariance = Array(covariance.size) { covariance[it].copyOf() },
         targetHeightM = targetHeightM,
         observedPhonePositions = observedPhonePositions.toList(),
+        bodyShadowAttenuationDb = bodyShadowAttenuationDb,
     )
 }
 

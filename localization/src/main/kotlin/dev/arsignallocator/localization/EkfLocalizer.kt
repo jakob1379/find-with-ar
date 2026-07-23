@@ -2,6 +2,7 @@ package dev.arsignallocator.localization
 
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
@@ -13,12 +14,50 @@ data class RssiPrediction(
     val jacobian: DoubleArray,
 )
 
+internal data class DirectionalRssiAdjustment(
+    val rssiDb: Double,
+    val derivativeX: Double,
+    val derivativeZ: Double,
+)
+
+internal fun directionalRssiAdjustment(
+    target: Vec2,
+    phone: Vec2,
+    phoneForward: Vec2?,
+    maximumAttenuationDb: Double,
+): DirectionalRssiAdjustment {
+    if (phoneForward == null || maximumAttenuationDb == 0.0) {
+        return DirectionalRssiAdjustment(0.0, 0.0, 0.0)
+    }
+    val deltaX = target.x - phone.x
+    val deltaZ = target.z - phone.z
+    val distance = hypot(deltaX, deltaZ)
+    if (distance <= 1e-6) return DirectionalRssiAdjustment(0.0, 0.0, 0.0)
+    val forwardLength = hypot(phoneForward.x, phoneForward.z)
+    val forwardX = phoneForward.x / forwardLength
+    val forwardZ = phoneForward.z / forwardLength
+    val dot = forwardX * deltaX + forwardZ * deltaZ
+    val facingCosine = dot / distance
+    if (facingCosine >= 0.0) return DirectionalRssiAdjustment(0.0, 0.0, 0.0)
+    val distanceCubed = distance * distance * distance
+    return DirectionalRssiAdjustment(
+        rssiDb = maximumAttenuationDb * facingCosine,
+        derivativeX = maximumAttenuationDb * (
+            forwardX / distance - dot * deltaX / distanceCubed
+            ),
+        derivativeZ = maximumAttenuationDb * (
+            forwardZ / distance - dot * deltaZ / distanceCubed
+            ),
+    )
+}
+
 object RssiObservationModel {
     fun predictAndJacobian(
         state: DoubleArray,
         sample: SpatialRssiSample,
         targetHeightM: Double,
         minDistanceM: Double = 0.15,
+        bodyShadowAttenuationDb: Double = 0.0,
     ): RssiPrediction {
         require(state.size == 4)
         require(minDistanceM > 0.0)
@@ -32,7 +71,15 @@ object RssiObservationModel {
         val distance = sqrt(distanceSquared)
         val referenceRssi = state[2]
         val pathLossExponent = state[3]
-        val predicted = referenceRssi - 10.0 * pathLossExponent * log10(distance)
+        val directional = directionalRssiAdjustment(
+            target = Vec2(state[0], state[1]),
+            phone = sample.phonePosition,
+            phoneForward = sample.phoneForward,
+            maximumAttenuationDb = bodyShadowAttenuationDb,
+        )
+        val predicted = referenceRssi -
+            10.0 * pathLossExponent * log10(distance) +
+            directional.rssiDb
         val spatialScale = if (rawDistanceSquared <= minimumDistanceSquared) {
             0.0
         } else {
@@ -41,8 +88,8 @@ object RssiObservationModel {
         return RssiPrediction(
             rssiDbm = predicted,
             jacobian = doubleArrayOf(
-                spatialScale * deltaX,
-                spatialScale * deltaZ,
+                spatialScale * deltaX + directional.derivativeX,
+                spatialScale * deltaZ + directional.derivativeZ,
                 1.0,
                 -10.0 * log10(distance),
             ),
@@ -54,7 +101,7 @@ data class EkfConfig(
     val positionProcessVarianceM2: Double = 1e-5,
     val referenceRssiProcessVarianceDb2: Double = 0.02,
     val pathLossProcessVariance: Double = 0.0002,
-    val modelVarianceDb2: Double = 9.0,
+    val modelVarianceDb2: Double = 16.0,
     val normalizedInnovationSquaredGate: Double = 9.0,
     val minDistanceM: Double = 0.15,
     val spatialBucketSizeM: Double = 0.35,
@@ -121,6 +168,7 @@ class EkfLocalizer(
             sample = sample,
             targetHeightM = targetHeightM,
             minDistanceM = config.minDistanceM,
+            bodyShadowAttenuationDb = initial.bodyShadowAttenuationDb,
         )
         val measurementVariance = sample.measurementVarianceDb2 + config.modelVarianceDb2
         val covarianceTimesJacobian = DoubleArray(4) { row ->
@@ -240,6 +288,7 @@ class EkfLocalizer(
         Array(covariance.size) { covariance[it].copyOf() },
         targetHeightM,
         observedPhonePositions.toList(),
+        bodyShadowAttenuationDb,
     )
 
     private fun bucketKey(position: Vec2): Pair<Int, Int> = Pair(
@@ -266,7 +315,7 @@ class HybridGridEkfLocalizer(
     @Synchronized
     override fun update(sample: SpatialRssiSample): LocationEstimate {
         val gridEstimate = grid.update(sample)
-        if (gridEstimate.state == EstimateState.GRID_MULTIMODAL) {
+        if (gridEstimate.state != EstimateState.GRID_UNIMODAL) {
             ekf = null
             consecutiveRejections = 0
             return gridEstimate
@@ -274,9 +323,10 @@ class HybridGridEkfLocalizer(
         val activeEkf = ekf
         if (activeEkf == null) {
             val initialization = grid.ekfInitializationOrNull() ?: return gridEstimate
-            return EkfLocalizer(initialization, ekfConfig, gridEstimate.dataQuality)
+            val initialized = EkfLocalizer(initialization, ekfConfig, gridEstimate.dataQuality)
                 .also { ekf = it }
                 .estimate()
+            return initialized.withGridRegion(gridEstimate)
         }
 
         val rejectedBefore = activeEkf.estimate().diagnostics.rejectedUpdates
@@ -295,11 +345,22 @@ class HybridGridEkfLocalizer(
             ekf = null
             return grid.update(sample)
         }
-        return estimate
+        if (gridEstimate.hpd90?.contains(requireNotNull(estimate.meanXZ)) == false) {
+            val replacement = grid.ekfInitializationOrNull()?.let {
+                EkfLocalizer(it, ekfConfig, gridEstimate.dataQuality)
+            }
+            ekf = replacement
+            consecutiveRejections = 0
+            return replacement?.estimate()?.withGridRegion(gridEstimate) ?: gridEstimate
+        }
+        return estimate.withGridRegion(gridEstimate)
     }
 
     @Synchronized
-    override fun estimate(): LocationEstimate = ekf?.estimate() ?: grid.estimate()
+    override fun estimate(): LocationEstimate {
+        val gridEstimate = grid.estimate()
+        return ekf?.estimate()?.withGridRegion(gridEstimate) ?: gridEstimate
+    }
 
     @Synchronized
     override fun reset() {
@@ -307,6 +368,15 @@ class HybridGridEkfLocalizer(
         ekf = null
         consecutiveRejections = 0
     }
+
+    private fun LocationEstimate.withGridRegion(gridEstimate: LocationEstimate): LocationEstimate = copy(
+        hpd50 = gridEstimate.hpd50,
+        hpd90 = gridEstimate.hpd90,
+        area50SquareMetres = gridEstimate.area50SquareMetres,
+        area90SquareMetres = gridEstimate.area90SquareMetres,
+        modes = gridEstimate.modes,
+        dataQuality = gridEstimate.dataQuality,
+    )
 }
 
 internal const val CHI_SQUARED_2D_50 = 1.3862943611198906
