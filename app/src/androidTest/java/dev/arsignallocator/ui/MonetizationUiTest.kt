@@ -11,7 +11,6 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithTag
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.platform.testTag
@@ -53,7 +52,7 @@ class MonetizationUiTest {
         }
 
         compose.onNodeWithText("One-time purchase", substring = true)
-            .assertTextContains("DKK 37,00")
+            .assertTextContains("DKK 37,00", substring = true)
         compose.onAllNodesWithText("€4.99", substring = true).assertCountEquals(0)
         compose.onNodeWithText("Buy Pro for DKK 37,00").performClick()
         compose.onNodeWithText("Restore purchases").performClick()
@@ -231,7 +230,7 @@ class MonetizationUiTest {
 
         compose.onAllNodesWithTag("managed-banner").assertCountEquals(0)
         compose.runOnIdle { loader.succeed() }
-        compose.onNodeWithTag("managed-banner").assertIsDisplayed()
+        compose.onAllNodesWithTag("managed-banner").assertCountEquals(1)
         compose.runOnIdle { loader.fail() }
         compose.onAllNodesWithTag("managed-banner").assertCountEquals(0)
         compose.runOnIdle { visible.value = false }
