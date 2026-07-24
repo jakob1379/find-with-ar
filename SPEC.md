@@ -2,7 +2,7 @@
 
 - Status: approved scope, implementation pending
 - Target release: Google Play `1.0.0`
-- Last updated: 23 July 2026
+- Last updated: 24 July 2026
 
 This document defines the public v1 product and its release gates. Requirements are
 release-blocking unless explicitly marked as post-v1. Estimator design and current
@@ -13,9 +13,10 @@ experiments remain in the other documents under `docs/`.
 ## 1. Product definition
 
 AR Device Finder helps a person narrow down where a stationary, nearby device is within
-one room. It combines observable radio signal strength with ARCore phone movement and
-shows an honest likely area rather than promising an exact direction before the evidence
-supports one.
+one room. Pro users can instead run **Complete Scan** to map likely areas for all supported
+devices observed during one foreground room scan. Both modes combine observable radio
+signal strength with ARCore phone movement and show honest likely areas rather than
+promising exact directions before the evidence supports them.
 
 ### Audience and distribution
 
@@ -34,6 +35,10 @@ A target is supported only while Android can currently observe it:
 
 Being paired, bonded, or previously connected does not make an otherwise silent device
 observable. The picker must never show an unobserved paired device as findable.
+In Complete Scan, “all devices” means all supported radio identities actually observed
+during that foreground session. One physical device may appear more than once when Android
+exposes its Low Energy and Classic radios as unrelated identities; v1 does not guess that
+they are the same device.
 
 ### v1 success criteria
 
@@ -43,6 +48,8 @@ Public release requires all of the following:
   [`docs/validation-protocol.md`](docs/validation-protocol.md) pass;
 - at least 80% of closed-test searches for supported targets end in **Found it** without
   assistance and within three minutes;
+- Complete Scan maps every sufficiently observed target in the multi-device release trials
+  without mixing observations between session-local device identities;
 - the complete free and Pro flows pass on the physical-device matrix in section 8;
 - users can understand the target limitations before granting permissions;
 - store, privacy, advertising, billing, accessibility, and signing requirements are
@@ -54,14 +61,14 @@ Public release requires all of the following:
 
 - One-screen illustrated onboarding and safety guidance.
 - Camera, nearby-device, and location permission education and recovery.
-- Nearby-device discovery, search, ranking, and selection.
+- Nearby-device discovery, search, ranking, selection, and Pro Complete Scan mapping.
 - AR-assisted collecting and likely-area visualization.
 - Plain-language tracking guidance and signal-loss recovery.
 - A **Found it** action and an exit survey.
 - Local diagnostic traces, a ten-session history, export, sharing, and deletion.
 - Global Settings, help, privacy controls, support contact, and app information.
 - Consent-controlled banner advertising.
-- A one-time Pro purchase that removes advertising.
+- A one-time Pro purchase that unlocks Complete Scan and removes advertising.
 - Debug-only diagnostics, visualization controls, test ads, and an ad toggle.
 
 ### Explicitly out of scope
@@ -75,7 +82,8 @@ Public release requires all of the following:
 - Wi-Fi, UWB, iOS, or device-specific proprietary integrations.
 - Sound or haptic guidance.
 - Interstitial, rewarded, app-open, or timed full-screen advertising.
-- Subscriptions or paid feature gates beyond removing ads.
+- Cross-transport deduplication of radio identities.
+- Subscriptions or paid feature gates beyond Complete Scan and removing ads.
 - Automatic Play Store rating prompts.
 
 ## 3. User experience
@@ -95,7 +103,9 @@ The page must explain:
 - the app does not read GPS coordinates;
 - measurements stay on the phone unless the user explicitly exports or shares a trace;
 - the user must stay aware of obstacles and surroundings and only locate devices they own
-  or have permission to find.
+  or have permission to find;
+- Complete Scan is only for spaces the user has permission to survey and may observe
+  devices belonging to other people in radio range.
 
 The page has one primary **Continue** action. The same guide remains available from Help.
 Permissions are requested only after the explanation. A denial keeps the app usable enough
@@ -107,6 +117,7 @@ not enter a request loop.
 The picker starts the existing time-bounded discovery flow and provides **Scan again**.
 It must:
 
+- show a prominent **Complete Scan** action with a **Pro** label above the device list;
 - show currently observed devices only;
 - support case-insensitive search by the live advertised name;
 - show named devices first and collapse unnamed devices under **Show other devices**;
@@ -116,13 +127,46 @@ It must:
 - label a system-paired device and its observed transport in plain language;
 - explain how to wake a device or place it in pairing mode when nothing suitable appears.
 
+For a free user, selecting **Complete Scan** opens the Pro purchase sheet with the
+Play-localized one-time price and a dismissible **Not now** action. It must not start
+mapping before Pro is confirmed. For a confirmed or cached Pro user, the same action starts
+a fresh Complete Scan session without selecting a target.
+
 Advertised names may be displayed during the active process but must not be written into
-traces. Selection begins a fresh trace and tracking session.
+traces. Selecting a device or starting Complete Scan begins a fresh trace and tracking
+session.
 
 Free users see an advertising slot at the bottom of the picker. It appears only after
 consent permits a request and must not sit beside list actions or cause an accidental tap.
 
-### 3.3 Tracking
+### 3.3 Complete Scan
+
+Complete Scan is a foreground, same-room Pro workflow. It keeps one AR pose stream active
+while observing every supported radio identity seen during the session. BLE and Classic
+collection may use alternating scan windows where Android cannot run them concurrently.
+Each observed identity receives a session-local key and an independent estimator; hardware
+addresses remain in memory only for association and are discarded when the session ends.
+
+The primary surface is a top-down, room-relative map over the live AR session. It must:
+
+- show observed and sufficiently localized device counts;
+- list and map devices by live advertised name when available, otherwise by session-local
+  key, with the observed transport shown in plain language;
+- show a probability region until that device independently passes the same point and
+  uncertainty gates as single-device tracking;
+- keep collecting for every device when one map item is focused;
+- freeze, visibly mark as **Last seen**, and stop shrinking confidence for a device whose
+  signal disappears;
+- explain **More movement needed** or **Not enough signal** rather than inventing a
+  location;
+- allow **Finish scan** at any time.
+
+All mapped targets must remain stationary. Complete Scan cannot reveal silent paired
+devices, cannot guarantee that every physical device is radio-observable, and may show one
+physical device twice when its transports cannot be linked safely. The mode has no ads
+because it requires Pro.
+
+### 3.4 Tracking
 
 The tracking surface keeps the camera and estimate as the primary content. Guidance is
 visual only. The release UI automatically chooses what evidence to show:
@@ -150,7 +194,7 @@ covering the estimate. Ads must occupy layout space rather than overlaying the c
   bottom landscape banner instead of the side rail;
 - an unavailable, disallowed, or failed ad collapses its slot and never blocks tracking.
 
-### 3.4 Ending a session
+### 3.5 Ending a session
 
 **Found it** ends tracking and records `YES`. Leaving through **Devices** first asks:
 **Did AR Device Finder help you find the device?**
@@ -176,11 +220,17 @@ information.** The answer, reason, and note stay local unless the user explicitl
 or shares the trace. The user can skip without being trapped. Process death or a crash
 leaves an `INCOMPLETE` session rather than inventing an outcome.
 
-### 3.5 Settings
+Complete Scan ends through **Finish scan** and asks:
+**Did Complete Scan map the devices you expected?** It uses the same answer set, optional
+reasons, note limit, local-only handling, and `INCOMPLETE` process-death rule. Its outcome
+stores observed and localized device counts instead of claiming that one target was found.
+
+### 3.6 Settings
 
 Global Settings is reachable from the picker and contains:
 
-- **Remove ads** — current Play-localized price, purchase state, and purchase action;
+- **Pro: Complete Scan + no ads** — current Play-localized price, entitlement state, and
+  purchase action;
 - **Data** — the ten most recent sessions with export/share/delete-one and **Delete all**;
 - **Privacy and ads** — privacy policy and Google's privacy choices when required;
 - **Help and safety** — onboarding, supported-target limits, and troubleshooting;
@@ -200,15 +250,15 @@ and test identifiers must not exist in a release build.
 
 ### 4.1 Business model
 
-The free app includes every finding, trace, export, privacy, and support feature. Pro is a
-permanent, non-consumable Google Play product:
+The free app includes the complete single-device finder plus its trace, export, privacy,
+and support features. Pro is a permanent, non-consumable Google Play product:
 
 | Property | Decision |
 | --- | --- |
-| Product ID | `pro_remove_ads` |
-| Public label | Pro — Remove ads forever |
+| Product ID | `pro_lifetime` |
+| Public label | Pro — Complete Scan + no ads |
 | Base price | €4.99 equivalent, localized by Google Play |
-| Entitlement | Suppress all ad requests and ad slots |
+| Entitlement | Unlock Complete Scan and suppress all ad requests and ad slots |
 | Subscription | None |
 | Other paid features | None |
 
@@ -220,16 +270,17 @@ localized amount.
 Google Play Billing is the entitlement source. The client must:
 
 - query purchases at app start and whenever the app returns to the foreground;
-- grant Pro only for `PURCHASED`, non-consumed `pro_remove_ads` purchases;
+- grant Pro only for `PURCHASED`, non-consumed `pro_lifetime` purchases;
 - acknowledge a new purchase promptly;
 - show a pending state without granting Pro for `PENDING`;
 - restore the entitlement automatically on another device using the same Play account;
-- cache a confirmed entitlement so an existing Pro user remains ad-free offline;
+- cache a confirmed entitlement so an existing Pro user retains Complete Scan and remains
+  ad-free offline;
 - revoke the cache when a later successful Play query confirms the purchase is absent;
 - keep finding functional and show a retryable message when Billing is unavailable.
 
 V1 uses no purchase-verification backend. Client-only validation is sufficient for a
-single low-value ad-removal entitlement; server validation is reconsidered only if measured
+single low-value lifetime entitlement; server validation is reconsidered only if measured
 fraud materially affects revenue.
 
 ### 4.3 Advertising
@@ -278,16 +329,17 @@ semantics and adds these record types:
 
 | Record | Required content |
 | --- | --- |
-| `session` | Session ID, creation time, app version, phone model, coordinate frame, transport, manufacturer IDs, and service UUIDs |
-| `observation` | Existing synchronized radio, AR pose, filtering, acceptance, and estimator fields |
-| `event` | Monotonic time and a bounded code for AR state, scanner state, signal loss/recovery, estimator-state change, or recoverable failure |
-| `outcome` | End time, duration, `YES`/`NO`/`NOT_SURE`/`SKIPPED`/`INCOMPLETE`, optional reason/note, counts, path length, and final estimator state |
+| `session` | Session ID, mode (`SINGLE_TARGET` or `COMPLETE_SCAN`), creation time, app version, phone model, and coordinate frame; single-target mode also includes the selected target's redacted metadata |
+| `observation` | Session-local device key, transport, and existing synchronized radio, AR pose, filtering, acceptance, and estimator fields |
+| `event` | Monotonic time, optional session-local device key, and a bounded code for AR state, scanner state, signal loss/recovery, estimator-state change, or recoverable failure |
+| `outcome` | End time, duration, `YES`/`NO`/`NOT_SURE`/`SKIPPED`/`INCOMPLETE`, optional reason/note, counts, path length, and either the selected target's final state or Complete Scan's observed/localized counts and per-device final states |
 
 Release event records use stable codes and sanitized bounded details, not stack traces or
 arbitrary exception text. Debug details remain in Logcat.
 
-Analysis tools must accept both schema v1 and v2. Existing v1 fixtures remain valid, and a
-cross-language v2 fixture must cover event and outcome records.
+Analysis tools must accept both schema v1 and v2. Existing v1 fixtures remain valid, and
+cross-language v2 fixtures must cover event and outcome records plus a multi-device
+Complete Scan without identity crossover.
 
 ### 5.3 Retention and export
 
@@ -311,9 +363,9 @@ Never persist:
 - Play account, advertising identifier, email address, or contact data.
 
 An exported trace may contain relative phone poses, timestamps, radio measurements,
-transport, manufacturer/service identifiers, phone model, estimator results, the selected
-outcome, and the optional user note. The export and support flows must summarize this before
-sharing.
+session-local device keys, transport, manufacturer/service identifiers, phone model,
+estimator results for one or multiple devices, the selected outcome, and the optional user
+note. The export and support flows must summarize this before sharing.
 
 ## 6. Privacy, consent, and safety
 
@@ -323,7 +375,7 @@ not only data handled directly by AR Device Finder.
 | Data path | Handling |
 | --- | --- |
 | Camera and AR poses | Camera access is live; frames are not stored. Relative poses stay in local traces. |
-| Nearby-device observations | Used for finding; redacted traces stay local until explicit export/share. |
+| Nearby-device observations | Used for single-device finding or Complete Scan mapping; redacted traces may contain multiple devices' relative locations and stay local until explicit export/share. |
 | Location permission | Required for the physical estimate and platform scanning rules; GPS is not read. |
 | AdMob | Google may process IP-derived approximate location, interactions, diagnostics, and device identifiers for ads, analytics, and fraud prevention. |
 | Play Billing | Google handles purchase and Play account data; the app keeps only entitlement state and purchase metadata needed by Billing. |
@@ -357,8 +409,8 @@ Required launch assets:
 - an adaptive launcher icon with foreground, background, and monochrome variants;
 - a 512×512 PNG Play listing icon;
 - a 1024×500 feature graphic;
-- at least four accurate phone screenshots covering onboarding, picker, collecting, and
-  likely-area states, including portrait and landscape tracking;
+- at least five accurate phone screenshots covering onboarding, picker, collecting,
+  likely-area, and Complete Scan states, including portrait and landscape tracking;
 - concise English short and full descriptions that state the observable-device,
   stationary-target, same-room, and ARCore limitations;
 - useful alt text for every uploaded graphic;
@@ -377,9 +429,11 @@ Test on:
 - three Bluetooth Low Energy targets with controllable advertising;
 - two Bluetooth Classic targets that can remain discoverable.
 
-Each phone must exercise portrait and landscape, free and Pro, online and offline, and at
-least one Low Energy and one Classic target. Across the matrix, complete the open and
-furnished-room, height, occlusion, and held-out trials in the validation protocol.
+Each phone must exercise portrait and landscape, free and Pro, online and offline, at least
+one Low Energy and one Classic target, and a Complete Scan with at least three stationary
+targets. Across the matrix, at least one Complete Scan must contain both transports.
+Complete the open and furnished-room, height, occlusion, and held-out trials in the
+validation protocol.
 
 ### 8.2 Accuracy and usability gates
 
@@ -391,6 +445,11 @@ furnished-room, height, occlusion, and held-out trials in the validation protoco
 - Time to first useful region is under 15 seconds for a target advertising at least once
   per second; Classic performance is reported separately.
 - The estimator beats the strongest-signal baseline on held-out traces.
+- Complete Scan applies the accuracy and coverage gates independently to each target that
+  reaches the documented initialization threshold; every other observed target remains
+  visible with an explicit insufficient-evidence state.
+- Deterministic multi-device replay attributes every observation to the correct
+  session-local device and produces byte-identical per-device estimator inputs.
 - At least 80% of supported closed-test searches finish unassisted with **Found it** within
   three minutes.
 - A first-time user can explain why movement is needed and why some paired devices cannot
@@ -400,6 +459,8 @@ furnished-room, height, occlusion, and held-out trials in the validation protoco
 
 - Twenty consecutive discover/select/track/finish cycles on each phone complete without a
   crash, stuck scanner, unavailable camera, or corrupt trace.
+- Ten consecutive Complete Scan sessions on each phone finish without identity crossover,
+  a stuck scanner, an unavailable camera, a corrupt trace, or an unresponsive map.
 - A ten-minute session causes no forced stop, severe thermal state, or unusable degradation
   in camera and scan behaviour.
 - Bluetooth-off, permission denial, AR installation/update, camera unavailable, tracking
@@ -410,11 +471,12 @@ furnished-room, height, occlusion, and held-out trials in the validation protoco
   contrast, and remain usable at 200% font scaling.
 - No essential state is communicated by colour alone.
 - Ads remain visually separated from controls in every supported size and orientation.
-- A confirmed or cached Pro entitlement produces no ad request and no ad slot.
+- A confirmed or cached Pro entitlement unlocks Complete Scan and produces no ad request
+  or ad slot; a free, pending, cancelled, or revoked entitlement cannot start the mode.
 - Test matrices cover consent required/accepted/rejected, purchase success/pending/cancel,
   restore after reinstall, offline Pro, and refund reconciliation.
-- Automated tests prove that exported traces contain neither addresses nor advertised
-  names and that schema v1/v2 replay remains deterministic.
+- Automated tests prove that single- and multi-device exported traces contain neither
+  addresses nor advertised names and that schema v1/v2 replay remains deterministic.
 
 ### 8.4 Play publishing gate
 
@@ -446,7 +508,7 @@ debug entitlement. The following values are required before the stated boundary:
 | Public privacy-policy webpage and URL | Closed testing |
 | Play Console developer account | Internal/closed distribution and Billing tests |
 | AdMob app and banner identifiers | Release-candidate ad validation |
-| Activated `pro_remove_ads` product and regional prices | Release-candidate Billing validation |
+| Activated `pro_lifetime` product and regional prices | Release-candidate Billing validation |
 | Upload key and Play App Signing setup | First Play upload |
 
 The publisher will add the privacy webpage later. Until it exists, the app may link to a
