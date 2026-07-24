@@ -3,6 +3,7 @@
 .direnv/
 .gradle/
 .gradle-home/
+.gradle-local*/
 .gradle-user-home/
 .idea/
 .kotlin/
