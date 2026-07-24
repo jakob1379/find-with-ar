@@ -122,33 +122,67 @@ private fun OnboardingIllustration() {
     Canvas(
         Modifier.fillMaxWidth().height(160.dp).semantics {
             contentDescription =
-                "A phone moves sideways around a device while a broad likely area narrows"
+                "A person holds a phone and moves it sideways around a stationary device " +
+                    "while a broad likely area narrows"
         },
     ) {
+        val person = Color(0xFF455A64)
+        val personStroke = 4.dp.toPx()
+        val motionStroke = 3.dp.toPx()
         val centre = Offset(size.width * 0.68f, size.height * 0.52f)
         drawCircle(teal.copy(alpha = 0.12f), size.minDimension * 0.38f, centre)
         drawCircle(teal.copy(alpha = 0.22f), size.minDimension * 0.24f, centre)
         drawCircle(gold, size.minDimension * 0.07f, centre)
-        val phoneStart = Offset(size.width * 0.18f, size.height * 0.70f)
-        val phoneEnd = Offset(size.width * 0.38f, size.height * 0.30f)
-        drawLine(teal, phoneStart, phoneEnd, strokeWidth = 8f)
+
+        val head = Offset(size.width * 0.16f, size.height * 0.23f)
+        val shoulder = Offset(size.width * 0.16f, size.height * 0.37f)
+        val hip = Offset(size.width * 0.16f, size.height * 0.67f)
+        drawCircle(person, size.minDimension * 0.055f, head)
+        drawLine(person, shoulder, hip, strokeWidth = personStroke)
         drawLine(
-            teal,
-            phoneEnd,
-            Offset(phoneEnd.x - 16f, phoneEnd.y + 3f),
-            strokeWidth = 8f,
+            person,
+            hip,
+            Offset(size.width * 0.10f, size.height * 0.88f),
+            strokeWidth = personStroke,
         )
         drawLine(
-            teal,
-            phoneEnd,
-            Offset(phoneEnd.x - 3f, phoneEnd.y + 16f),
-            strokeWidth = 8f,
+            person,
+            hip,
+            Offset(size.width * 0.22f, size.height * 0.88f),
+            strokeWidth = personStroke,
         )
+
+        val phone = Offset(size.width * 0.35f, size.height * 0.43f)
+        val elbow = Offset(size.width * 0.25f, size.height * 0.48f)
+        drawLine(person, shoulder, elbow, strokeWidth = personStroke)
+        drawLine(person, elbow, phone, strokeWidth = personStroke)
+        val phoneWidth = 18.dp.toPx()
+        val phoneHeight = 32.dp.toPx()
         drawRoundRect(
             color = Color(0xFF263238),
-            topLeft = Offset(phoneStart.x - 18f, phoneStart.y - 30f),
-            size = androidx.compose.ui.geometry.Size(36f, 60f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f),
+            topLeft = Offset(phone.x - phoneWidth / 2f, phone.y - phoneHeight / 2f),
+            size = androidx.compose.ui.geometry.Size(phoneWidth, phoneHeight),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                4.dp.toPx(),
+                4.dp.toPx(),
+            ),
+        )
+
+        val motionStart = Offset(size.width * 0.29f, size.height * 0.72f)
+        val motionEnd = Offset(size.width * 0.47f, size.height * 0.72f)
+        val arrow = 8.dp.toPx()
+        drawLine(teal, motionStart, motionEnd, strokeWidth = motionStroke)
+        drawLine(
+            teal,
+            motionEnd,
+            Offset(motionEnd.x - arrow, motionEnd.y - arrow),
+            strokeWidth = motionStroke,
+        )
+        drawLine(
+            teal,
+            motionEnd,
+            Offset(motionEnd.x - arrow, motionEnd.y + arrow),
+            strokeWidth = motionStroke,
         )
     }
 }
@@ -249,19 +283,22 @@ private fun permissionLabel(permission: String): String = when (permission) {
 @Composable
 internal fun BluetoothScreen(unsupported: Boolean, onEnable: () -> Unit) {
     Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.app_name)) }) }) { padding ->
-        Column(
-            Modifier.padding(padding).padding(24.dp).fillMaxSize(),
+        LazyColumn(
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            contentPadding = PaddingValues(24.dp),
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(
-                if (unsupported) "Bluetooth is not supported" else "Bluetooth is turned off",
-                style = MaterialTheme.typography.headlineSmall,
-            )
-            Spacer(Modifier.height(12.dp))
-            Text("A target must be advertising or discoverable before it can appear.")
+            item {
+                Text(
+                    if (unsupported) "Bluetooth is not supported" else "Bluetooth is turned off",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+            }
+            item { Spacer(Modifier.height(12.dp)) }
+            item { Text("A target must be advertising or discoverable before it can appear.") }
             if (!unsupported) {
-                Spacer(Modifier.height(20.dp))
-                Button(onClick = onEnable) { Text("Turn on Bluetooth") }
+                item { Spacer(Modifier.height(20.dp)) }
+                item { Button(onClick = onEnable) { Text("Turn on Bluetooth") } }
             }
         }
     }
