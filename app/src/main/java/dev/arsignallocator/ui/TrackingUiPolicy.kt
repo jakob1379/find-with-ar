@@ -5,7 +5,8 @@ import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_MULTIMODAL
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
-import dev.arsignallocator.model.POINT_ESTIMATE_STATUSES
+import dev.arsignallocator.model.hasVisibleRegion
+import dev.arsignallocator.model.isLocalized
 
 internal enum class EstimateVisualization {
     HIDDEN,
@@ -112,23 +113,9 @@ internal data class SignalPresentation(
 
 internal fun selectEstimateVisualization(estimate: EstimateUiModel?): EstimateVisualization {
     if (estimate == null) return EstimateVisualization.HIDDEN
-    val hasMean = estimate.meanXMetres.isFiniteValue() && estimate.meanZMetres.isFiniteValue()
-    val hasRegion = estimate.probabilityCells.any {
-        it.probability.isFinite() && it.probability > 0.0
-    } || (
-        hasMean &&
-            estimate.covarianceXX.isFiniteValue() &&
-            estimate.covarianceXZ.isFiniteValue() &&
-            estimate.covarianceZZ.isFiniteValue()
-        )
-    val supportsPoint = estimate.status in POINT_ESTIMATE_STATUSES &&
-        hasMean &&
-        hasRegion &&
-        estimate.regionAreaSquareMetres.isPositiveFinite() &&
-        (estimate.ambiguity == null || estimate.ambiguity <= MAX_POINT_AMBIGUITY)
     return when {
-        supportsPoint -> EstimateVisualization.POINT
-        hasRegion -> EstimateVisualization.REGION
+        estimate.isLocalized() -> EstimateVisualization.POINT
+        estimate.hasVisibleRegion() -> EstimateVisualization.REGION
         else -> EstimateVisualization.HIDDEN
     }
 }
@@ -273,10 +260,6 @@ private fun signalIsLost(state: LocatorUiState, nowElapsedNanos: Long): Boolean 
     }
     return nowElapsedNanos - lastSeen > timeout
 }
-
-private fun Double?.isFiniteValue(): Boolean = this != null && isFinite()
-
-private fun Double?.isPositiveFinite(): Boolean = this != null && isFinite() && this > 0.0
 
 private const val SIDE_RAIL_WIDTH_DP = 320f
 private const val MIN_CAMERA_WIDTH_DP = 480f

@@ -4,24 +4,32 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.arsignallocator.ble.BleAvailability
 import dev.arsignallocator.ble.BleScanner
+import dev.arsignallocator.ble.RadioIdentity
 import dev.arsignallocator.ble.ScanPacket
 import dev.arsignallocator.core.MonotonicClock
 import dev.arsignallocator.localization.LocationEngine
+import dev.arsignallocator.localization.LocalizationAdapter
 import dev.arsignallocator.model.AppScreen
 import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.BluetoothTransport
+import dev.arsignallocator.model.CompleteScanDevice
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.DeviceKey
 import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
 import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_MULTIMODAL
 import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_UNIMODAL
+import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
+import dev.arsignallocator.model.TargetHandle
 import dev.arsignallocator.model.TrackingMetrics
+import dev.arsignallocator.monetization.EntitlementState
+import dev.arsignallocator.monetization.allowsCompleteScan
 import dev.arsignallocator.ar.PoseSource
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
+import dev.arsignallocator.trace.TraceMode
 import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.trace.TraceOutcomeReason
 import java.util.Locale
@@ -50,6 +58,9 @@ class LocatorViewModel(
     private val clock: MonotonicClock,
     private val appVersion: String,
     private val deviceModel: String,
+    private val completeScanEntitlement: () -> EntitlementState = { EntitlementState.FREE },
+    private val locationEngineFactory: () -> LocationEngine = { LocalizationAdapter() },
+    private val synchronizerFactory: () -> SampleSynchronizer = { SampleSynchronizer() },
     private val computationDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
@@ -63,12 +74,15 @@ class LocatorViewModel(
     private var poseJob: Job? = null
     private var arStatusJob: Job? = null
     private var traceActive = false
+    private var appInForeground = true
     @Volatile
     private var traceOperation = 0L
     private val traceMutex = Mutex()
     private val candidateAccumulators = linkedMapOf<DeviceKey, CandidateAccumulator>()
     private var candidateOrder = emptyList<DeviceKey>()
     private var lastBreadcrumb: PoseObservation? = null
+    private var latestPose: PoseObservation? = null
+    private val completePipelines = linkedMapOf<RadioIdentity, CompleteDevicePipeline>()
 
     init {
         viewModelScope.launch {
@@ -107,13 +121,13 @@ class LocatorViewModel(
         runtimeReady = ready
         if (!ready) {
             stopRuntimeWork("Permissions or Bluetooth are unavailable")
-        } else if (_state.value.screen == AppScreen.DEVICES) {
+        } else if (appInForeground && _state.value.screen == AppScreen.DEVICES) {
             startDiscovery()
         }
     }
 
     fun startDiscovery() {
-        if (!runtimeReady) return
+        if (!runtimeReady || !appInForeground) return
         when (val availability = scanner.availability()) {
             BleAvailability.Available -> Unit
             BleAvailability.Disabled -> return fail("Bluetooth is turned off")
@@ -179,6 +193,7 @@ class LocatorViewModel(
         synchronizer.reset()
         locationEngine.reset()
         lastBreadcrumb = null
+        latestPose = null
         val previousTrace = _state.value.lastTraceFile
         _state.value = LocatorUiState(
             screen = AppScreen.TRACKING,
@@ -206,6 +221,75 @@ class LocatorViewModel(
         }
     }
 
+    fun startCompleteScan(): CompleteScanStartResult {
+        if (_state.value.screen != AppScreen.DEVICES) {
+            return CompleteScanStartResult.UNAVAILABLE
+        }
+        if (!completeScanEntitlement().allowsCompleteScan()) {
+            return CompleteScanStartResult.REQUIRES_PRO
+        }
+        if (!runtimeReady) {
+            fail("Permissions or Bluetooth are unavailable")
+            return CompleteScanStartResult.UNAVAILABLE
+        }
+        when (val availability = scanner.availability()) {
+            BleAvailability.Available -> Unit
+            BleAvailability.Disabled -> {
+                fail("Bluetooth is turned off")
+                return CompleteScanStartResult.UNAVAILABLE
+            }
+            BleAvailability.Unsupported -> {
+                fail("This phone does not support Bluetooth scanning")
+                return CompleteScanStartResult.UNAVAILABLE
+            }
+            is BleAvailability.PermissionDenied -> {
+                fail(availability.detail)
+                return CompleteScanStartResult.UNAVAILABLE
+            }
+        }
+
+        val operation = ++traceOperation
+        discoveryJob?.cancel()
+        discoveryJob = null
+        stopTrackingJobs()
+        traceActive = false
+        lastBreadcrumb = null
+        latestPose = null
+        val previous = _state.value
+        _state.value = LocatorUiState(
+            screen = AppScreen.COMPLETE_SCAN,
+            arStatus = previous.arStatus,
+            guidance = "Move around the room to collect signal from different positions",
+            recoverableError = traceRecorder.storageError,
+            lastTraceFile = previous.lastTraceFile,
+        )
+        viewModelScope.launch {
+            val traceError = runCatching {
+                traceIo {
+                    if (operation != traceOperation) return@traceIo
+                    traceRecorder.start(
+                        appVersion,
+                        deviceModel,
+                        TraceMode.COMPLETE_SCAN,
+                    )
+                    if (operation != traceOperation) traceRecorder.stop()
+                }
+            }.exceptionOrNull()?.let { "Could not start Complete Scan trace recording" }
+            if (operation != traceOperation) return@launch
+            traceActive = traceError == null
+            _state.update {
+                it.copy(recoverableError = traceError ?: traceRecorder.storageError)
+            }
+            if (traceError == null) startCompleteScanner()
+        }
+        return CompleteScanStartResult.STARTED
+    }
+
+    fun focusCompleteScanDevice(key: DeviceKey) {
+        if (_state.value.completeScanDevices.none { it.key == key }) return
+        _state.update { it.copy(focusedDeviceKey = key) }
+    }
+
     fun showTracking() {
         if (_state.value.selected != null) _state.update { it.copy(screen = AppScreen.TRACKING) }
     }
@@ -215,6 +299,35 @@ class LocatorViewModel(
     }
 
     fun stopAndReturnToDevices() = completeTrace(TraceOutcome.INCOMPLETE)
+
+    fun onAppStopped() {
+        appInForeground = false
+        when (_state.value.screen) {
+            AppScreen.TRACKING, AppScreen.DEBUG, AppScreen.COMPLETE_SCAN ->
+                completeTrace(TraceOutcome.INCOMPLETE)
+            AppScreen.DEVICES -> {
+                discoveryJob?.cancel()
+                discoveryJob = null
+                _state.update {
+                    it.copy(
+                        isDiscovering = false,
+                        discoverySecondsRemaining = 0,
+                    )
+                }
+            }
+        }
+    }
+
+    fun onAppStarted() {
+        appInForeground = true
+        if (
+            runtimeReady &&
+            _state.value.screen == AppScreen.DEVICES &&
+            discoveryJob?.isActive != true
+        ) {
+            startDiscovery()
+        }
+    }
 
     fun completeTrace(
         outcome: TraceOutcome,
@@ -287,6 +400,24 @@ class LocatorViewModel(
         }
     }
 
+    private fun startCompleteScanner() {
+        scanJob?.cancel()
+        scanJob = viewModelScope.launch {
+            scanner.completeScan()
+                .catch {
+                    stopRuntimeWork("Complete Scan stopped because Bluetooth scanning failed")
+                }
+                .collect(::processCompleteScanPacket)
+        }
+        lostTargetJob?.cancel()
+        lostTargetJob = viewModelScope.launch {
+            while (isActive) {
+                delay(1_000L)
+                publishCompleteScanDevices()
+            }
+        }
+    }
+
     private fun onDiscovered(packet: ScanPacket) {
         val accumulator = candidateAccumulators.getOrPut(packet.observation.deviceKey) {
             CandidateAccumulator(packet)
@@ -350,8 +481,61 @@ class LocatorViewModel(
         }
     }
 
+    private suspend fun processCompleteScanPacket(packet: ScanPacket) {
+        val identity = RadioIdentity(
+            packet.target.transport,
+            packet.target.ephemeralAddress,
+        )
+        val pipeline = completePipelines.getOrPut(identity) {
+            CompleteDevicePipeline(
+                target = packet.target,
+                synchronizer = synchronizerFactory().also { synchronizer ->
+                    latestPose?.let(synchronizer::addPose)
+                },
+                locationEngine = locationEngineFactory(),
+            )
+        }
+        packet.target.advertisedName?.takeIf(String::isNotBlank)?.let {
+            pipeline.displayName = it
+        }
+        val (joined, estimate) = withContext(computationDispatcher) {
+            val synchronized = pipeline.synchronizer.synchronize(packet.observation)
+            val latest = if (synchronized.accepted) {
+                pipeline.locationEngine.update(synchronized)
+            } else {
+                pipeline.locationEngine.estimate()
+            }
+            synchronized to latest
+        }
+        if (traceActive) {
+            try {
+                traceIo { traceRecorder.record(joined, estimate) }
+            } catch (error: Exception) {
+                traceActive = false
+                stopRuntimeWork("Complete Scan stopped because trace recording failed")
+                return
+            }
+        }
+        pipeline.estimate = estimate
+        pipeline.metrics = pipeline.metrics.copy(
+            rawRssiDbm = packet.observation.rssiDbm,
+            rollingMedianRssiDbm = joined.filteredRssiDbm,
+            receivedCount = pipeline.metrics.receivedCount + 1,
+            acceptedCount = pipeline.metrics.acceptedCount + if (joined.accepted) 1 else 0,
+            rejectedNoPoseCount = pipeline.metrics.rejectedNoPoseCount +
+                if (joined.rejectionReason == "no_recent_pose") 1 else 0,
+            lastSeenElapsedNanos = packet.observation.receivedAtElapsedNanos,
+        )
+        publishCompleteScanDevices()
+    }
+
     private fun onPose(pose: PoseObservation) {
-        synchronizer.addPose(pose)
+        latestPose = pose
+        if (_state.value.screen == AppScreen.COMPLETE_SCAN) {
+            completePipelines.values.forEach { it.synchronizer.addPose(pose) }
+        } else {
+            synchronizer.addPose(pose)
+        }
         if (pose.trackingState != PoseTrackingState.TRACKING ||
             _state.value.screen == AppScreen.DEVICES
         ) return
@@ -367,6 +551,32 @@ class LocatorViewModel(
                     pathLengthMetres = current.metrics.pathLengthMetres +
                         if (distance.isFinite()) distance else 0.0,
                 ),
+            )
+        }
+    }
+
+    private fun publishCompleteScanDevices() {
+        if (_state.value.screen != AppScreen.COMPLETE_SCAN) return
+        val now = clock.nowNanos()
+        val devices = completePipelines.values.map { pipeline ->
+            val lastSeenAt = pipeline.metrics.lastSeenElapsedNanos
+            CompleteScanDevice(
+                key = pipeline.target.key,
+                displayName = pipeline.displayName
+                    ?: "Device ${pipeline.target.key.value}",
+                transport = pipeline.target.transport,
+                metrics = pipeline.metrics,
+                estimate = pipeline.estimate,
+                lastSeen = lastSeenAt != null &&
+                    now - lastSeenAt > COMPLETE_SCAN_LAST_SEEN_NANOS,
+            )
+        }
+        _state.update { current ->
+            current.copy(
+                completeScanDevices = devices,
+                focusedDeviceKey = current.focusedDeviceKey
+                    ?.takeIf { focused -> devices.any { it.key == focused } }
+                    ?: devices.firstOrNull()?.key,
             )
         }
     }
@@ -411,6 +621,7 @@ class LocatorViewModel(
 
     private fun stopRuntimeWork(message: String) {
         val operation = ++traceOperation
+        val pathLengthMetres = _state.value.metrics.pathLengthMetres
         discoveryJob?.cancel()
         discoveryJob = null
         stopTrackingJobs()
@@ -426,13 +637,24 @@ class LocatorViewModel(
         }
         viewModelScope.launch {
             val result = traceIo {
-                if (operation == traceOperation) traceRecorder.stop() else null
+                if (operation == traceOperation) {
+                    traceRecorder.finish(
+                        TraceOutcome.INCOMPLETE,
+                        pathLengthMetres = pathLengthMetres,
+                    )
+                } else {
+                    null
+                }
             } ?: return@launch
             if (operation != traceOperation) return@launch
             _state.update {
                 it.copy(
                     lastTraceFile = result.file ?: it.lastTraceFile,
-                    recoverableError = result.error?.let { error -> "$message; $error" } ?: message,
+                    recoverableError = if (result.error == null) {
+                        message
+                    } else {
+                        "$message. The trace could not be finalized"
+                    },
                 )
             }
         }
@@ -443,6 +665,7 @@ class LocatorViewModel(
         lostTargetJob?.cancel()
         scanJob = null
         lostTargetJob = null
+        completePipelines.clear()
     }
 
     private fun fail(message: String) {
@@ -502,13 +725,29 @@ class LocatorViewModel(
         }
     }
 
+    private class CompleteDevicePipeline(
+        val target: TargetHandle,
+        val synchronizer: SampleSynchronizer,
+        val locationEngine: LocationEngine,
+        var displayName: String? = target.advertisedName,
+        var metrics: TrackingMetrics = TrackingMetrics(),
+        var estimate: EstimateUiModel? = null,
+    )
+
     private companion object {
         const val DISCOVERY_SECONDS = 20
         const val BREADCRUMB_SPACING_METRES = 0.12
         const val TARGET_LOST_NANOS = 5_000_000_000L
         const val CLASSIC_TARGET_LOST_NANOS = 20_000_000_000L
         const val CANDIDATE_WINDOW_NANOS = 5_000_000_000L
+        const val COMPLETE_SCAN_LAST_SEEN_NANOS = 30_000_000_000L
     }
+}
+
+enum class CompleteScanStartResult {
+    STARTED,
+    REQUIRES_PRO,
+    UNAVAILABLE,
 }
 
 internal fun updateCandidateOrder(

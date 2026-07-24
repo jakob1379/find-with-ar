@@ -64,6 +64,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.arsignallocator.BuildConfig
+import dev.arsignallocator.CompleteScanStartResult
 import dev.arsignallocator.LocatorViewModel
 import dev.arsignallocator.ar.ArProjectionSnapshot
 import dev.arsignallocator.ar.ArCorePoseSource
@@ -90,7 +91,7 @@ fun SignalLocatorApp(
     onExport: (File) -> Unit,
     onLeaveTracking: () -> Unit,
     onFoundTarget: () -> Unit,
-    onCompleteScan: () -> Unit = {},
+    onCompleteScanPurchase: () -> Unit = {},
     onPro: () -> Unit = {},
     onDataHistory: () -> Unit = {},
     onPrivacyChoices: () -> Unit = {},
@@ -200,7 +201,14 @@ fun SignalLocatorApp(
                         devicePage = DevicePage.PICKER
                         viewModel.selectDevice(it.handle.key)
                     },
-                    onCompleteScan = onCompleteScan,
+                    onCompleteScan = {
+                        when (viewModel.startCompleteScan()) {
+                            CompleteScanStartResult.REQUIRES_PRO -> onCompleteScanPurchase()
+                            CompleteScanStartResult.STARTED,
+                            CompleteScanStartResult.UNAVAILABLE,
+                            -> Unit
+                        }
+                    },
                     onSettings = { devicePage = DevicePage.SETTINGS },
                     onExport = onExport,
                     onDelete = viewModel::deleteLocalTraces,
@@ -221,6 +229,12 @@ fun SignalLocatorApp(
                     onNotices = onNotices,
                 )
             }
+            state.screen == AppScreen.COMPLETE_SCAN -> CompleteScanScreen(
+                state = state,
+                arPoseSource = arPoseSource,
+                onFocus = viewModel::focusCompleteScanDevice,
+                onFinishScan = onLeaveTracking,
+            )
             else -> TrackingScreen(
                 state = state,
                 arPoseSource = arPoseSource,
@@ -434,10 +448,12 @@ private fun TrackingCamera(
         if (showMap || showBreadcrumbs) {
             TopDownMap(
                 breadcrumbs = state.breadcrumbs,
-                estimate = estimate,
+                estimates = if (showMap && estimate != null) {
+                    listOf(MapEstimateItem(state.selected?.key, estimate, showPoint))
+                } else {
+                    emptyList()
+                },
                 projection = projection,
-                showEstimate = showMap,
-                showPoint = showPoint,
                 showBreadcrumbs = showBreadcrumbs,
                 talkBackSummary = estimateTalkBackSummary(statusContent, visualization),
                 modifier = Modifier.align(Alignment.TopEnd).padding(12.dp).size(176.dp),
@@ -543,25 +559,33 @@ private fun ArFloorOverlay(
     }
 }
 
+internal data class MapEstimateItem(
+    val key: DeviceKey?,
+    val estimate: EstimateUiModel,
+    val showPoint: Boolean,
+    val regionColor: Color = Color(0xFFFFB74D),
+    val markerColor: Color = Color.Yellow,
+)
+
 @Composable
-private fun TopDownMap(
+internal fun TopDownMap(
     breadcrumbs: List<Pair<Double, Double>>,
-    estimate: EstimateUiModel?,
+    estimates: List<MapEstimateItem>,
     projection: ArProjectionSnapshot?,
-    showEstimate: Boolean,
-    showPoint: Boolean,
     showBreadcrumbs: Boolean,
     talkBackSummary: String,
+    focusedKey: DeviceKey? = null,
     modifier: Modifier = Modifier,
 ) {
     val visibleBreadcrumbs = breadcrumbs.takeIf { showBreadcrumbs }.orEmpty()
-    val visibleEstimate = estimate.takeIf { showEstimate }
     val points = buildList {
         addAll(visibleBreadcrumbs)
         projection?.cameraPose?.let { add(it.xMetres to it.zMetres) }
-        visibleEstimate?.probabilityCells?.forEach { add(it.xMetres to it.zMetres) }
-        if (visibleEstimate?.meanXMetres != null && visibleEstimate.meanZMetres != null) {
-            add(visibleEstimate.meanXMetres to visibleEstimate.meanZMetres)
+        estimates.forEach { item ->
+            item.estimate.probabilityCells.forEach { add(it.xMetres to it.zMetres) }
+            if (item.estimate.meanXMetres != null && item.estimate.meanZMetres != null) {
+                add(item.estimate.meanXMetres to item.estimate.meanZMetres)
+            }
         }
     }
     Surface(
@@ -582,16 +606,21 @@ private fun TopDownMap(
             fun project(x: Double, z: Double): Offset =
                 topDownMapOffset(x, z, minX, minZ, scale)
 
-            val maxProbability = visibleEstimate?.probabilityCells?.maxOfOrNull { it.probability } ?: 1.0
-            visibleEstimate?.probabilityCells?.forEach { cell ->
-                val cellSize = (cell.resolutionMetres * scale).toFloat().coerceAtLeast(1f)
-                val location = project(cell.xMetres, cell.zMetres)
-                val alpha = (0.12 + 0.68 * cell.probability / maxProbability).toFloat()
-                drawRect(
-                    color = Color(0xFFFFB74D).copy(alpha = alpha),
-                    topLeft = Offset(location.x - cellSize / 2, location.y - cellSize / 2),
-                    size = Size(cellSize, cellSize),
-                )
+            estimates.forEach { item ->
+                val focusAlpha = if (focusedKey == null || focusedKey == item.key) 1f else 0.38f
+                val maxProbability =
+                    item.estimate.probabilityCells.maxOfOrNull { it.probability } ?: 1.0
+                item.estimate.probabilityCells.forEach { cell ->
+                    val cellSize = (cell.resolutionMetres * scale).toFloat().coerceAtLeast(1f)
+                    val location = project(cell.xMetres, cell.zMetres)
+                    val alpha =
+                        ((0.12 + 0.68 * cell.probability / maxProbability) * focusAlpha).toFloat()
+                    drawRect(
+                        color = item.regionColor.copy(alpha = alpha),
+                        topLeft = Offset(location.x - cellSize / 2, location.y - cellSize / 2),
+                        size = Size(cellSize, cellSize),
+                    )
+                }
             }
             visibleBreadcrumbs.zipWithNext().forEach { (from, to) ->
                 drawLine(Color(0xFF80CBC4), project(from.first, from.second), project(to.first, to.second), 2.dp.toPx())
@@ -600,32 +629,43 @@ private fun TopDownMap(
                 drawCircle(Color(0xFFB2DFDB), 2.5.dp.toPx(), project(it.first, it.second))
             }
 
-            val meanX = visibleEstimate?.meanXMetres
-            val meanZ = visibleEstimate?.meanZMetres
-            val xx = visibleEstimate?.covarianceXX
-            val xz = visibleEstimate?.covarianceXZ
-            val zz = visibleEstimate?.covarianceZZ
-            if (meanX != null && meanZ != null && xx != null && xz != null && zz != null) {
-                val trace = xx + zz
-                val difference = xx - zz
-                val root = sqrt(max(0.0, difference * difference + 4.0 * xz * xz))
-                val major = max(0.0, (trace + root) / 2.0)
-                val minor = max(0.0, (trace - root) / 2.0)
-                val chi90 = 4.605170186
-                val majorRadius = (sqrt(major * chi90) * scale).toFloat()
-                val minorRadius = (sqrt(minor * chi90) * scale).toFloat()
-                val angleDegrees = (0.5 * atan2(2.0 * xz, difference) * 180.0 / PI).toFloat()
-                val estimateCenter = project(meanX, meanZ)
-                rotate(angleDegrees, pivot = estimateCenter) {
-                    drawOval(
-                        color = Color(0x66FFEB3B),
-                        topLeft = Offset(estimateCenter.x - majorRadius, estimateCenter.y - minorRadius),
-                        size = Size(majorRadius * 2, minorRadius * 2),
+            estimates.forEach { item ->
+                val estimate = item.estimate
+                val focusAlpha = if (focusedKey == null || focusedKey == item.key) 1f else 0.38f
+                val meanX = estimate.meanXMetres
+                val meanZ = estimate.meanZMetres
+                val xx = estimate.covarianceXX
+                val xz = estimate.covarianceXZ
+                val zz = estimate.covarianceZZ
+                if (meanX != null && meanZ != null && xx != null && xz != null && zz != null) {
+                    val trace = xx + zz
+                    val difference = xx - zz
+                    val root = sqrt(max(0.0, difference * difference + 4.0 * xz * xz))
+                    val major = max(0.0, (trace + root) / 2.0)
+                    val minor = max(0.0, (trace - root) / 2.0)
+                    val majorRadius = (sqrt(major * CHI_SQUARED_90) * scale).toFloat()
+                    val minorRadius = (sqrt(minor * CHI_SQUARED_90) * scale).toFloat()
+                    val angleDegrees =
+                        (0.5 * atan2(2.0 * xz, difference) * 180.0 / PI).toFloat()
+                    val estimateCenter = project(meanX, meanZ)
+                    rotate(angleDegrees, pivot = estimateCenter) {
+                        drawOval(
+                            color = item.markerColor.copy(alpha = 0.40f * focusAlpha),
+                            topLeft = Offset(
+                                estimateCenter.x - majorRadius,
+                                estimateCenter.y - minorRadius,
+                            ),
+                            size = Size(majorRadius * 2, minorRadius * 2),
+                        )
+                    }
+                }
+                if (item.showPoint && meanX != null && meanZ != null) {
+                    drawCircle(
+                        item.markerColor.copy(alpha = focusAlpha),
+                        4.dp.toPx(),
+                        project(meanX, meanZ),
                     )
                 }
-            }
-            if (showPoint && meanX != null && meanZ != null) {
-                drawCircle(Color.Yellow, 4.dp.toPx(), project(meanX, meanZ))
             }
             val cameraPose = projection?.cameraPose
             val userCenter = project(
@@ -679,3 +719,13 @@ private const val PREFERENCES_NAME = "ui_shell"
 private const val ONBOARDING_COMPLETE = "onboarding_complete"
 private const val PERMISSIONS_REQUESTED = "permissions_requested"
 private const val SIGNAL_FRESHNESS_TICK_MILLIS = 500L
+private val COMPLETE_SCAN_MAP_COLORS = listOf(
+    Color(0xFFFFB74D),
+    Color(0xFF4DD0E1),
+    Color(0xFFCE93D8),
+    Color(0xFFAED581),
+    Color(0xFFFF8A80),
+)
+
+internal fun completeScanMapColor(index: Int): Color =
+    COMPLETE_SCAN_MAP_COLORS[index % COMPLETE_SCAN_MAP_COLORS.size]

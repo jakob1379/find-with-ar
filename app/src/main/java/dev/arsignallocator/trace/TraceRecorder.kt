@@ -14,6 +14,7 @@ import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
 import dev.arsignallocator.model.SynchronizedObservation
 import dev.arsignallocator.model.TargetHandle
+import dev.arsignallocator.model.isLocalized
 import java.io.BufferedWriter
 import java.io.Closeable
 import java.io.File
@@ -89,6 +90,12 @@ internal data class DeviceState(
     val key: DeviceKey,
     val transport: BluetoothTransport,
     val estimate: EstimateUiModel?,
+    val localized: Boolean = estimate?.isLocalized() == true,
+)
+
+private data class RecoveredEstimate(
+    val model: EstimateUiModel,
+    val localized: Boolean,
 )
 
 private data class SourceDevice(
@@ -327,9 +334,7 @@ class TraceRecorder(
                         ?.let { sanitize(it, MAX_OUTCOME_NOTE_LENGTH) }
                         ?.takeIf(String::isNotBlank),
                     observedDeviceCount = observedKeys.size,
-                    localizedDeviceCount = states.count {
-                        it.estimate?.meanXMetres != null && it.estimate.meanZMetres != null
-                    },
+                    localizedDeviceCount = states.count { it.estimate?.isLocalized() == true },
                     pathLengthMetres = pathLengthMetres,
                     deviceStates = states,
                 ),
@@ -635,9 +640,7 @@ class TraceRecorder(
                         reason = null,
                         note = null,
                         observedDeviceCount = summary.observedDeviceCount,
-                        localizedDeviceCount = summary.deviceStates.count {
-                            it.estimate?.meanXMetres != null && it.estimate.meanZMetres != null
-                        },
+                        localizedDeviceCount = summary.deviceStates.count(DeviceState::localized),
                         pathLengthMetres = 0.0,
                         deviceStates = summary.deviceStates,
                     ) + "\n",
@@ -916,7 +919,7 @@ private object TraceV2Validator {
     private val advertisementFields =
         setOf("manufacturer_ids", "service_uuids", "synthetic_outlier")
     private val estimatorFields = setOf(
-        "kind", "status", "mean_x_m", "mean_z_m", "covariance_xx_m2",
+        "kind", "status", "localized", "mean_x_m", "mean_z_m", "covariance_xx_m2",
         "covariance_xz_m2", "covariance_zz_m2", "region_probability",
     )
     private val eventFields = setOf(
@@ -1049,7 +1052,8 @@ private object TraceV2Validator {
         val state = DeviceState(
             key = record.requiredDeviceKey("device_key"),
             transport = record.requiredTransport(),
-            estimate = estimate,
+            estimate = estimate?.model,
+            localized = estimate?.localized == true,
         )
         requireSelectedIdentity(session, state.key, state.transport)
         return RecoveryObservation(state, sequence, appMonotonicNanos)
@@ -1118,10 +1122,20 @@ private object TraceV2Validator {
             require((status == "insufficient_evidence") == (estimate == null)) {
                 "Device state status and estimator disagree"
             }
-            require(estimate == null || estimate.status.lowercase(Locale.ROOT) == status) {
+            require(estimate == null || estimate.model.status.lowercase(Locale.ROOT) == status) {
                 "Device state status and estimator status disagree"
             }
-            require(states.put(key, DeviceState(key, transport, estimate)) == null) {
+            require(
+                states.put(
+                    key,
+                    DeviceState(
+                        key,
+                        transport,
+                        estimate?.model,
+                        estimate?.localized == true,
+                    ),
+                ) == null,
+            ) {
                 "Outcome repeats a device key"
             }
         }
@@ -1136,22 +1150,24 @@ private object TraceV2Validator {
             require(recoveredStates[key]?.transport == state.transport) {
                 "Outcome device transport changed"
             }
+            require(recoveredStates[key]?.localized == state.localized) {
+                "Outcome device localization changed"
+            }
         }
         require(observedCount == observedKeys.size.toLong()) {
             "Outcome observed device count is invalid"
         }
-        val derivedLocalizedCount = states.values.count {
-            it.estimate?.meanXMetres != null && it.estimate.meanZMetres != null
-        }
+        val derivedLocalizedCount = states.values.count(DeviceState::localized)
         require(localizedCount == derivedLocalizedCount.toLong()) {
             "Outcome localized device count is invalid"
         }
     }
 
-    private fun estimator(record: JsonObject): EstimateUiModel {
+    private fun estimator(record: JsonObject): RecoveredEstimate {
         requireAllowedFields(record, estimatorFields, "estimator")
         val kind = record.requiredString("kind")
         val status = record.requiredString("status")
+        val localized = record.requiredBoolean("localized")
         require(
             kind == "bayesian_grid" &&
                 status in setOf("collecting", "grid_multimodal", "grid_unimodal") ||
@@ -1180,16 +1196,19 @@ private object TraceV2Validator {
         require(probability == null || probability > 0.0 && probability < 1.0) {
             "Estimator region probability is invalid"
         }
-        return EstimateUiModel(
-            status = status.uppercase(Locale.ROOT),
-            meanXMetres = meanX,
-            meanZMetres = meanZ,
-            covarianceXX = covariance[0],
-            covarianceXZ = covariance[1],
-            covarianceZZ = covariance[2],
-            regionProbability = probability,
-            regionAreaSquareMetres = null,
-            ambiguity = null,
+        return RecoveredEstimate(
+            model = EstimateUiModel(
+                status = status.uppercase(Locale.ROOT),
+                meanXMetres = meanX,
+                meanZMetres = meanZ,
+                covarianceXX = covariance[0],
+                covarianceXZ = covariance[1],
+                covarianceZZ = covariance[2],
+                regionProbability = probability,
+                regionAreaSquareMetres = null,
+                ambiguity = null,
+            ),
+            localized = localized,
         )
     }
 
@@ -1545,13 +1564,16 @@ object TraceJsonEncoder {
             field("transport", state.transport.name.lowercase(Locale.ROOT))
             field("status", state.estimate?.status?.lowercase(Locale.ROOT) ?: "insufficient_evidence")
             append(",\"estimator\":")
-            appendEstimator(state.estimate)
+            appendEstimator(state.estimate, state.localized)
             append('}')
         }
         append("]}")
     }
 
-    private fun StringBuilder.appendEstimator(estimate: EstimateUiModel?) {
+    private fun StringBuilder.appendEstimator(
+        estimate: EstimateUiModel?,
+        localized: Boolean = estimate?.isLocalized() == true,
+    ) {
         if (estimate == null) {
             append("null")
             return
@@ -1559,6 +1581,7 @@ object TraceJsonEncoder {
         append('{')
         field("kind", if (estimate.status == ESTIMATE_STATUS_EKF) "ekf" else "bayesian_grid", first = true)
         field("status", estimate.status.lowercase(Locale.ROOT))
+        field("localized", localized)
         nullableField("mean_x_m", estimate.meanXMetres)
         nullableField("mean_z_m", estimate.meanZMetres)
         nullableField("covariance_xx_m2", estimate.covarianceXX)

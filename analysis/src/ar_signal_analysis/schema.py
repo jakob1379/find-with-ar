@@ -106,6 +106,7 @@ V2_FIELDS = {
         {
             "kind",
             "status",
+            "localized",
             "mean_x_m",
             "mean_z_m",
             "covariance_xx_m2",
@@ -199,6 +200,7 @@ class Pose:
 class EstimatorSnapshot:
     kind: str
     status: str
+    localized: bool | None = None
     mean_x_m: float | None = None
     mean_z_m: float | None = None
     covariance_xx_m2: float | None = None
@@ -220,7 +222,7 @@ class EstimatorSnapshot:
         return all(value is not None for value in values)
 
     def to_json(self) -> JsonObject:
-        return {
+        result: JsonObject = {
             "kind": self.kind,
             "status": self.status,
             "mean_x_m": self.mean_x_m,
@@ -230,6 +232,9 @@ class EstimatorSnapshot:
             "covariance_zz_m2": self.covariance_zz_m2,
             "region_probability": self.region_probability,
         }
+        if self.localized is not None:
+            result["localized"] = self.localized
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -894,9 +899,7 @@ def validate_trace(trace: Trace) -> None:
                 f"device_key {device_key} changes transport", source=trace.source
             )
         estimator = state.get("estimator")
-        if isinstance(estimator, Mapping) and (
-            estimator.get("mean_x_m") is not None and estimator.get("mean_z_m") is not None
-        ):
+        if isinstance(estimator, Mapping) and estimator.get("localized") is True:
             localized_count += 1
 
     if outcome_keys != expected_keys:
@@ -928,6 +931,11 @@ def _parse_estimator(
     snapshot = EstimatorSnapshot(
         kind=_required_string(value, "kind", source=source, line=line),
         status=_required_string(value, "status", source=source, line=line),
+        localized=(
+            _required_bool(value, "localized", source=source, line=line)
+            if strict
+            else value.get("localized")
+        ),
         mean_x_m=_optional_number(value, "mean_x_m", source=source, line=line),
         mean_z_m=_optional_number(value, "mean_z_m", source=source, line=line),
         covariance_xx_m2=_optional_number(value, "covariance_xx_m2", source=source, line=line),

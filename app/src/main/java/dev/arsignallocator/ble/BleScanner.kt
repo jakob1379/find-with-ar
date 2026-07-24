@@ -23,11 +23,13 @@ import dev.arsignallocator.model.TargetHandle
 import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class ScanPacket(
@@ -48,6 +50,38 @@ interface BleScanner {
     fun availability(): BleAvailability
     fun discover(durationMillis: Long = 20_000L): Flow<ScanPacket>
     fun track(target: TargetHandle): Flow<ScanPacket>
+    fun completeScan(): Flow<ScanPacket>
+}
+
+internal data class RadioIdentity(
+    val transport: BluetoothTransport,
+    val ephemeralAddress: String,
+)
+
+internal class SessionDeviceIdentities {
+    private val keys = linkedMapOf<RadioIdentity, DeviceKey>()
+
+    @Synchronized
+    fun key(transport: BluetoothTransport, ephemeralAddress: String): DeviceKey =
+        keys.getOrPut(RadioIdentity(transport, ephemeralAddress)) {
+            DeviceKey("D${(keys.size + 1).toString().padStart(2, '0')}")
+        }
+
+    @Synchronized
+    fun size(): Int = keys.size
+}
+
+internal fun continuousCompleteScan(
+    supportsLowEnergy: Boolean,
+    scanLowEnergyWindow: (SessionDeviceIdentities) -> Flow<ScanPacket>,
+    scanClassicInquiry: (SessionDeviceIdentities) -> Flow<ScanPacket>,
+): Flow<ScanPacket> = flow {
+    val identities = SessionDeviceIdentities()
+    while (currentCoroutineContext().isActive) {
+        if (supportsLowEnergy) emitAll(scanLowEnergyWindow(identities))
+        if (!currentCoroutineContext().isActive) break
+        emitAll(scanClassicInquiry(identities))
+    }
 }
 
 class AndroidBleScanner(
@@ -56,8 +90,6 @@ class AndroidBleScanner(
 ) : BleScanner {
     private val appContext = context.applicationContext
     private val manager = appContext.getSystemService(BluetoothManager::class.java)
-    private val identityLock = Any()
-    private val identities = linkedMapOf<String, DeviceKey>()
 
     @SuppressLint("MissingPermission")
     override fun availability(): BleAvailability = try {
@@ -67,8 +99,8 @@ class AndroidBleScanner(
         BleAvailability.PermissionDenied(error.message ?: "Bluetooth permission is missing")
     }
 
-    override fun discover(durationMillis: Long): Flow<ScanPacket> {
-        synchronized(identityLock) { identities.clear() }
+    override fun discover(durationMillis: Long): Flow<ScanPacket> = flow {
+        val identities = SessionDeviceIdentities()
         val leDuration = if (
             appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
         ) {
@@ -77,30 +109,64 @@ class AndroidBleScanner(
             0L
         }
         val classicDuration = durationMillis - leDuration
-        return flow {
-            if (leDuration > 0L) {
-                emitAll(scanLe(target = null, durationMillis = leDuration, lowLatency = false))
-            }
-            if (classicDuration > 0L) {
-                emitAll(scanClassic(target = null, durationMillis = classicDuration))
-            }
+        if (leDuration > 0L) {
+            emitAll(
+                scanLe(
+                    target = null,
+                    durationMillis = leDuration,
+                    lowLatency = false,
+                    identities = identities,
+                ),
+            )
+        }
+        if (classicDuration > 0L) {
+            emitAll(
+                scanClassic(
+                    target = null,
+                    durationMillis = classicDuration,
+                    identities = identities,
+                ),
+            )
         }
     }
 
     override fun track(target: TargetHandle): Flow<ScanPacket> = when (target.transport) {
-        BluetoothTransport.CLASSIC -> scanClassic(target = target, durationMillis = null)
+        BluetoothTransport.CLASSIC -> scanClassic(
+            target = target,
+            durationMillis = null,
+            identities = null,
+        )
         BluetoothTransport.LOW_ENERGY -> scanLe(
             target = target,
             durationMillis = null,
             lowLatency = true,
+            identities = null,
         )
     }
+
+    override fun completeScan(): Flow<ScanPacket> = continuousCompleteScan(
+        supportsLowEnergy = appContext.packageManager.hasSystemFeature(
+            PackageManager.FEATURE_BLUETOOTH_LE,
+        ),
+        scanLowEnergyWindow = { identities ->
+            scanLe(
+                target = null,
+                durationMillis = COMPLETE_SCAN_LE_WINDOW_MILLIS,
+                lowLatency = false,
+                identities = identities,
+            )
+        },
+        scanClassicInquiry = { identities ->
+            scanClassic(target = null, durationMillis = null, identities = identities)
+        },
+    )
 
     @SuppressLint("MissingPermission")
     private fun scanLe(
         target: TargetHandle?,
         durationMillis: Long?,
         lowLatency: Boolean,
+        identities: SessionDeviceIdentities?,
     ): Flow<ScanPacket> = callbackFlow {
         val adapter = manager?.adapter
             ?: throw BleScanException("This phone does not support Bluetooth")
@@ -123,7 +189,7 @@ class AndroidBleScanner(
 
             private fun emitResult(result: ScanResult) {
                 val packet = try {
-                    result.toPacket(target)
+                    result.toPacket(target, identities)
                 } catch (ignored: SecurityException) {
                     close(BleScanException("Bluetooth permission was revoked"))
                     null
@@ -171,6 +237,7 @@ class AndroidBleScanner(
     private fun scanClassic(
         target: TargetHandle?,
         durationMillis: Long?,
+        identities: SessionDeviceIdentities?,
     ): Flow<ScanPacket> = callbackFlow {
         val adapter = manager?.adapter
             ?: throw BleScanException("This phone does not support Bluetooth")
@@ -196,7 +263,7 @@ class AndroidBleScanner(
                 when (intent.action) {
                     BluetoothDevice.ACTION_FOUND -> {
                         val packet = try {
-                            intent.toClassicPacket(target)
+                            intent.toClassicPacket(target, identities)
                         } catch (_: SecurityException) {
                             close(BleScanException("Bluetooth permission was revoked"))
                             null
@@ -259,7 +326,10 @@ class AndroidBleScanner(
     }
 
     @SuppressLint("MissingPermission")
-    private fun Intent.toClassicPacket(selected: TargetHandle?): ScanPacket? {
+    private fun Intent.toClassicPacket(
+        selected: TargetHandle?,
+        identities: SessionDeviceIdentities?,
+    ): ScanPacket? {
         val device = bluetoothDevice() ?: return null
         val rssi = getShortExtra(BluetoothDevice.EXTRA_RSSI, Short.MIN_VALUE).toInt()
         if (rssi !in -127..20) return null
@@ -267,12 +337,8 @@ class AndroidBleScanner(
         if (selected != null && selected.ephemeralAddress != address) return null
         val receivedAtNanos = clock.nowNanos()
         val services = device.uuids.orEmpty().mapTo(linkedSetOf()) { it.uuid.toString() }
-        val key = synchronized(identityLock) {
-            identities.getOrPut(address) {
-                DeviceKey("D${(identities.size + 1).toString().padStart(2, '0')}")
-            }
-        }
         val transport = selected?.transport ?: BluetoothTransport.CLASSIC
+        val key = selected?.key ?: checkNotNull(identities).key(transport, address)
         val name = getStringExtra(BluetoothDevice.EXTRA_NAME) ?: device.name
         val handle = selected ?: TargetHandle(
             key = key,
@@ -308,7 +374,10 @@ class AndroidBleScanner(
         }
 
     @SuppressLint("MissingPermission")
-    private fun ScanResult.toPacket(selected: TargetHandle?): ScanPacket? {
+    private fun ScanResult.toPacket(
+        selected: TargetHandle?,
+        identities: SessionDeviceIdentities?,
+    ): ScanPacket? {
         if (rssi !in -127..20) return null
         val address = device.address.uppercase(Locale.ROOT)
         if (selected != null && selected.ephemeralAddress != address) return null
@@ -319,11 +388,8 @@ class AndroidBleScanner(
             repeat(data.size()) { index -> add(data.keyAt(index)) }
         }
         val services = record?.serviceUuids.orEmpty().mapTo(linkedSetOf()) { it.uuid.toString() }
-        val key = synchronized(identityLock) {
-            identities.getOrPut(address) {
-                DeviceKey("D${(identities.size + 1).toString().padStart(2, '0')}")
-            }
-        }
+        val key = selected?.key
+            ?: checkNotNull(identities).key(BluetoothTransport.LOW_ENERGY, address)
         val handle = selected ?: TargetHandle(
             key = key,
             ephemeralAddress = address,
@@ -359,6 +425,7 @@ class AndroidBleScanner(
 
     private companion object {
         const val LE_DISCOVERY_MILLIS = 6_000L
+        const val COMPLETE_SCAN_LE_WINDOW_MILLIS = 6_000L
         const val CLASSIC_START_DELAY_MILLIS = 250L
         const val CLASSIC_RESTART_DELAY_MILLIS = 300L
     }

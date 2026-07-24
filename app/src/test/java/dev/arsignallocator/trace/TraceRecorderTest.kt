@@ -305,6 +305,52 @@ class TraceRecorderTest {
     }
 
     @Test
+    fun `finalization uses UI localization gates instead of estimator means`() {
+        val recorder = TraceRecorder(
+            traceDirectory = temporaryFolder.root,
+            wallClockMillis = { 0L },
+            monotonicClockNanos = { 0L },
+            sessionIdFactory = { "localization-gates" },
+        )
+        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.record(
+            sample("source-a", null, 100L),
+            localizedEstimate("GRID_MULTIMODAL"),
+        )
+
+        val outcome = recorder.finish(TraceOutcome.INCOMPLETE).file!!.readLines().last()
+
+        assertTrue(outcome.contains("\"localized_device_count\":0"))
+        assertTrue(outcome.contains("\"localized\":false"))
+    }
+
+    @Test
+    fun `recovery preserves UI localization gate disagreements`() {
+        TraceRecorder(
+            traceDirectory = temporaryFolder.root,
+            wallClockMillis = { 0L },
+            monotonicClockNanos = { 0L },
+            sessionIdFactory = { "recovered-localization-gates" },
+        ).apply {
+            start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+            record(
+                sample("source-a", null, 100L),
+                localizedEstimate("GRID_MULTIMODAL"),
+            )
+            close()
+        }
+
+        val outcome = TraceRecorder(
+            traceDirectory = temporaryFolder.root,
+            wallClockMillis = { 1_000L },
+            monotonicClockNanos = { 1_000_000_000L },
+        ).initialize().single().readLines().last()
+
+        assertTrue(outcome.contains("\"localized_device_count\":0"))
+        assertTrue(outcome.contains("\"localized\":false"))
+    }
+
+    @Test
     fun `recovery does not duplicate fully written outcome`() {
         val active = temporaryFolder.newFile("signal-trace-finished.active.ndjson")
         val outcome = TraceJsonEncoder.outcome(

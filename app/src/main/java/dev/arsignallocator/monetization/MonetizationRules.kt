@@ -12,6 +12,9 @@ enum class StorePurchaseState {
     PURCHASED,
 }
 
+fun EntitlementState.allowsCompleteScan(): Boolean =
+    this == EntitlementState.PRO_CACHED || this == EntitlementState.PRO_CONFIRMED
+
 data class EntitlementDecision(
     val state: EntitlementState,
     val cachePro: Boolean,

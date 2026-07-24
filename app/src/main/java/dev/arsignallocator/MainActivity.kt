@@ -20,6 +20,7 @@ import dev.arsignallocator.monetization.AdsEligibility
 import dev.arsignallocator.monetization.AdsConsentController
 import dev.arsignallocator.monetization.BillingState
 import dev.arsignallocator.monetization.BillingEntitlementController
+import dev.arsignallocator.monetization.EntitlementState
 import dev.arsignallocator.monetization.canInitializeAds
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
@@ -32,6 +33,7 @@ class MainActivity : ComponentActivity() {
     private var pendingExport: File? = null
     private lateinit var billing: BillingEntitlementController
     private lateinit var consent: AdsConsentController
+    private lateinit var viewModel: LocatorViewModel
     private val exportLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/x-ndjson"),
     ) { uri ->
@@ -59,7 +61,7 @@ class MainActivity : ComponentActivity() {
         billing.refresh()
         val traceDirectory = File(filesDir, "traces")
         val scanner = AndroidBleScanner(applicationContext)
-        val viewModel = ViewModelProvider(
+        viewModel = ViewModelProvider(
             this,
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -73,6 +75,9 @@ class MainActivity : ComponentActivity() {
                         clock = ElapsedRealtimeClock,
                         appVersion = BuildConfig.VERSION_NAME,
                         deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+                        completeScanEntitlement = { billing.state.value.entitlement },
+                        locationEngineFactory = { LocalizationAdapter() },
+                        synchronizerFactory = { SampleSynchronizer() },
                     ) as T
                 }
             },
@@ -87,8 +92,15 @@ class MainActivity : ComponentActivity() {
                 onExport = ::exportTrace,
                 onLeaveTracking = viewModel::stopAndReturnToDevices,
                 onFoundTarget = { viewModel.completeTrace(TraceOutcome.YES) },
-                onCompleteScan = {
-                    showShellMessage("Complete Scan Pro is not connected in this build")
+                onCompleteScanPurchase = {
+                    if (billing.state.value.entitlement == EntitlementState.PENDING) {
+                        showShellMessage("Your Pro purchase is still pending")
+                    } else if (!billing.launchPurchase(this)) {
+                        showShellMessage(
+                            billing.state.value.retryableError
+                                ?: "Pro purchase is temporarily unavailable",
+                        )
+                    }
                 },
                 onPro = { showShellMessage("Pro purchases are not connected in this build") },
                 onDataHistory = { showShellMessage("Session history is not connected in this build") },
@@ -110,6 +122,16 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::billing.isInitialized) billing.refresh()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (::viewModel.isInitialized) viewModel.onAppStarted()
+    }
+
+    override fun onStop() {
+        if (::viewModel.isInitialized) viewModel.onAppStopped()
+        super.onStop()
     }
 
     override fun onDestroy() {

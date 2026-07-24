@@ -85,6 +85,24 @@ data class EstimateUiModel(
     val probabilityCells: List<ProbabilityCell> = emptyList(),
 )
 
+fun EstimateUiModel.hasVisibleRegion(): Boolean {
+    val hasMean = meanXMetres.isFiniteValue() && meanZMetres.isFiniteValue()
+    return probabilityCells.any { it.probability.isFinite() && it.probability > 0.0 } || (
+        hasMean &&
+            covarianceXX.isFiniteValue() &&
+            covarianceXZ.isFiniteValue() &&
+            covarianceZZ.isFiniteValue()
+        )
+}
+
+fun EstimateUiModel.isLocalized(): Boolean =
+    status in POINT_ESTIMATE_STATUSES &&
+        meanXMetres.isFiniteValue() &&
+        meanZMetres.isFiniteValue() &&
+        hasVisibleRegion() &&
+        regionAreaSquareMetres.isPositiveFinite() &&
+        (ambiguity == null || ambiguity <= MAX_POINT_AMBIGUITY)
+
 const val ESTIMATE_STATUS_COLLECTING = "COLLECTING"
 const val ESTIMATE_STATUS_GRID_MULTIMODAL = "GRID_MULTIMODAL"
 const val ESTIMATE_STATUS_GRID_UNIMODAL = "GRID_UNIMODAL"
@@ -117,7 +135,7 @@ data class ArStatus(
     val recoverable: Boolean = false,
 )
 
-enum class AppScreen { DEVICES, TRACKING, DEBUG }
+enum class AppScreen { DEVICES, TRACKING, COMPLETE_SCAN, DEBUG }
 
 data class TrackingMetrics(
     val rawRssiDbm: Int? = null,
@@ -129,6 +147,17 @@ data class TrackingMetrics(
     val pathLengthMetres: Double = 0.0,
 )
 
+data class CompleteScanDevice(
+    val key: DeviceKey,
+    val displayName: String,
+    val transport: BluetoothTransport,
+    val metrics: TrackingMetrics,
+    val estimate: EstimateUiModel?,
+    val lastSeen: Boolean = false,
+) {
+    val localized: Boolean get() = estimate?.isLocalized() == true
+}
+
 data class LocatorUiState(
     val screen: AppScreen = AppScreen.DEVICES,
     val isDiscovering: Boolean = false,
@@ -138,8 +167,19 @@ data class LocatorUiState(
     val metrics: TrackingMetrics = TrackingMetrics(),
     val arStatus: ArStatus = ArStatus(ArRuntimeStatus.INACTIVE),
     val estimate: EstimateUiModel? = null,
+    val completeScanDevices: List<CompleteScanDevice> = emptyList(),
+    val focusedDeviceKey: DeviceKey? = null,
     val breadcrumbs: List<Pair<Double, Double>> = emptyList(),
     val guidance: String = "Select a device to begin",
     val recoverableError: String? = null,
     val lastTraceFile: File? = null,
-)
+) {
+    val observedDeviceCount: Int get() = completeScanDevices.size
+    val localizedDeviceCount: Int get() = completeScanDevices.count(CompleteScanDevice::localized)
+}
+
+private fun Double?.isFiniteValue(): Boolean = this != null && isFinite()
+
+private fun Double?.isPositiveFinite(): Boolean = this != null && isFinite() && this > 0.0
+
+private const val MAX_POINT_AMBIGUITY = 0.20
