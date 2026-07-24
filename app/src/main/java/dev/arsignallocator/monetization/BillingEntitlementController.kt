@@ -35,6 +35,7 @@ data class BillingState(
     val entitlement: EntitlementState,
     val isAuthoritative: Boolean = false,
     val localizedPrice: String? = null,
+    val purchaseInProgress: Boolean = false,
     val retryableError: String? = null,
 )
 
@@ -288,6 +289,7 @@ class BillingEntitlementController internal constructor(
     fun refresh() {
         mainThreadCheck()
         if (closed) return
+        _state.update { it.copy(purchaseInProgress = false) }
         if (billingSdk.isReady) {
             queryPurchases()
             queryProduct()
@@ -321,15 +323,29 @@ class BillingEntitlementController internal constructor(
         mainThreadCheck()
         if (closed) return false
         val currentProduct = product
+        if (
+            !_state.value.isAuthoritative ||
+            _state.value.entitlement != EntitlementState.FREE
+        ) {
+            refresh()
+            return false
+        }
         if (!billingSdk.isReady || currentProduct == null) {
             clearCatalog(PRO_PRICE_UNAVAILABLE)
             refresh()
             return false
         }
+        entitlementError = null
         val result = billingSdk.launchPurchase(activity, currentProduct)
         if (result.responseCode != BillingClient.BillingResponseCode.OK) {
             entitlementError = billingError(result)
-            publishErrors()
+        }
+        _state.update {
+            it.copy(
+                purchaseInProgress =
+                    result.responseCode == BillingClient.BillingResponseCode.OK,
+                retryableError = visibleError(),
+            )
         }
         return result.responseCode == BillingClient.BillingResponseCode.OK
     }
@@ -392,10 +408,10 @@ class BillingEntitlementController internal constructor(
         result: StoreBillingResult,
         purchases: List<StorePurchase>?,
     ) {
-        if (closed || result.responseCode != BillingClient.BillingResponseCode.OK) {
-            if (!closed &&
-                result.responseCode != BillingClient.BillingResponseCode.USER_CANCELED
-            ) {
+        if (closed) return
+        _state.update { it.copy(purchaseInProgress = false) }
+        if (result.responseCode != BillingClient.BillingResponseCode.OK) {
+            if (result.responseCode != BillingClient.BillingResponseCode.USER_CANCELED) {
                 entitlementError = billingError(result)
                 publishErrors()
             }

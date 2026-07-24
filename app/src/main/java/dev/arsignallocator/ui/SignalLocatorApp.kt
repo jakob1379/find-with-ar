@@ -44,6 +44,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +74,13 @@ import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.DeviceKey
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
+import dev.arsignallocator.monetization.AdRequestContext
+import dev.arsignallocator.monetization.AdsEligibility
+import dev.arsignallocator.monetization.BannerSurface
+import dev.arsignallocator.monetization.BillingState
+import dev.arsignallocator.monetization.CompleteScanRoute
+import dev.arsignallocator.monetization.ConsentState
+import dev.arsignallocator.monetization.completeScanRoute
 import dev.arsignallocator.permissions.PermissionPolicy
 import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.trace.TraceSummary
@@ -83,21 +91,25 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
 @Composable
-fun SignalLocatorApp(
+internal fun SignalLocatorApp(
     viewModel: LocatorViewModel,
     arPoseSource: ArCorePoseSource,
+    billingState: BillingState,
+    consentState: ConsentState,
+    variantMonetizationUi: VariantMonetizationUi,
     onExport: (File) -> Unit,
     onShare: (File) -> Unit,
     onSendSupport: (TraceSummary?, File?) -> Unit,
-    onCompleteScanPurchase: () -> Unit = {},
-    onPro: () -> Unit = {},
+    onPurchasePro: () -> Unit = {},
+    onRestorePro: () -> Unit = {},
+    privacyPolicyAvailable: Boolean = false,
+    onPrivacyPolicy: () -> Unit = {},
     onPrivacyChoices: () -> Unit = {},
-    trackingBannerVisible: Boolean = false,
-    trackingBanner: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -123,6 +135,34 @@ fun SignalLocatorApp(
     var permissionRefresh by remember { mutableIntStateOf(0) }
     var permissionWasRequested by remember {
         mutableStateOf(preferences.getBoolean(PERMISSIONS_REQUESTED, false))
+    }
+    var proSheetOrigin by rememberSaveable { mutableStateOf<ProSheetOrigin?>(null) }
+    val overlayVisible = proSheetOrigin != null || exitSurveyQuestion != null
+    val adRequestContext = AdRequestContext(
+        eligibility = AdsEligibility(
+            adsEnabled = BuildConfig.ADS_ENABLED,
+            isDebugBuild = BuildConfig.DEBUG,
+            debugTestAdsEnabled = variantMonetizationUi.allowAds,
+            entitlement = billingState.entitlement,
+            billingAuthoritative = billingState.isAuthoritative,
+        ),
+        screenAllowsAds = currentScreenAllowsAds(
+            screen = state.screen,
+            devicePage = devicePage,
+            overlayVisible = overlayVisible,
+        ),
+        consentAllowsAds = consentState.consentAllowsAds,
+        adsSdkReady = consentState.adsSdkReady,
+    )
+    val requestCompleteScan = {
+        when (completeScanRoute(billingState.entitlement)) {
+            CompleteScanRoute.START -> {
+                if (viewModel.startCompleteScan() == CompleteScanStartResult.REQUIRES_PRO) {
+                    proSheetOrigin = ProSheetOrigin.COMPLETE_SCAN
+                }
+            }
+            CompleteScanRoute.SHOW_PRO -> proSheetOrigin = ProSheetOrigin.COMPLETE_SCAN
+        }
     }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -179,6 +219,16 @@ fun SignalLocatorApp(
             DevicePage.NOTICES -> DevicePage.ABOUT
         }
     }
+    LaunchedEffect(proSheetOrigin, billingState.entitlement) {
+        if (
+            proSheetOrigin == ProSheetOrigin.COMPLETE_SCAN &&
+            completeScanRoute(billingState.entitlement) == CompleteScanRoute.START
+        ) {
+            if (viewModel.startCompleteScan() != CompleteScanStartResult.REQUIRES_PRO) {
+                proSheetOrigin = null
+            }
+        }
+    }
 
     MaterialTheme(colorScheme = lightColorScheme()) {
         when {
@@ -214,20 +264,31 @@ fun SignalLocatorApp(
                         devicePage = DevicePage.PICKER
                         viewModel.selectDevice(it.handle.key)
                     },
-                    onCompleteScan = {
-                        when (viewModel.startCompleteScan()) {
-                            CompleteScanStartResult.REQUIRES_PRO -> onCompleteScanPurchase()
-                            CompleteScanStartResult.STARTED,
-                            CompleteScanStartResult.UNAVAILABLE,
-                            -> Unit
+                    onCompleteScan = requestCompleteScan,
+                    onSettings = { devicePage = DevicePage.SETTINGS },
+                    onExport = onExport,
+                    onDelete = viewModel::deleteLocalTraces,
+                    banner = {
+                        if (proSheetOrigin == null) {
+                            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                                ManagedBannerSlot(
+                                    surface = BannerSurface.PICKER,
+                                    widthDp = maxWidth.value.roundToInt(),
+                                    requestContext = adRequestContext,
+                                )
+                            }
                         }
                     },
-                    onSettings = { devicePage = DevicePage.SETTINGS },
                 )
                 DevicePage.SETTINGS -> SettingsScreen(
+                    billingState = billingState,
+                    consentState = consentState,
+                    variantMonetizationUi = variantMonetizationUi,
+                    privacyPolicyAvailable = privacyPolicyAvailable,
                     onBack = { devicePage = DevicePage.PICKER },
-                    onPro = onPro,
+                    onPro = { proSheetOrigin = ProSheetOrigin.SETTINGS },
                     onDataHistory = { devicePage = DevicePage.DATA },
+                    onPrivacyPolicy = onPrivacyPolicy,
                     onPrivacyChoices = onPrivacyChoices,
                     onHelp = { devicePage = DevicePage.HELP },
                     onContactSupport = { devicePage = DevicePage.SUPPORT },
@@ -274,8 +335,15 @@ fun SignalLocatorApp(
                 },
                 onRetryAr = arPoseSource::retry,
                 onExport = onExport,
-                bannerVisible = trackingBannerVisible,
-                bannerContent = trackingBanner,
+                adRequestContext = adRequestContext,
+            )
+        }
+        if (proSheetOrigin != null) {
+            ProPurchaseSheet(
+                billingState = billingState,
+                onPurchase = onPurchasePro,
+                onRestore = onRestorePro,
+                onDismiss = { proSheetOrigin = null },
             )
         }
         exitSurveyQuestion?.let { question ->
@@ -302,6 +370,16 @@ internal fun surveyQuestionFor(screen: AppScreen): String? = when (screen) {
     AppScreen.TRACKING, AppScreen.DEBUG -> SINGLE_TARGET_SURVEY_QUESTION
     AppScreen.COMPLETE_SCAN -> COMPLETE_SCAN_SURVEY_QUESTION
     AppScreen.DEVICES -> null
+}
+
+internal fun currentScreenAllowsAds(
+    screen: AppScreen,
+    devicePage: DevicePage,
+    overlayVisible: Boolean,
+): Boolean = !overlayVisible && when (screen) {
+    AppScreen.DEVICES -> devicePage == DevicePage.PICKER
+    AppScreen.TRACKING, AppScreen.DEBUG -> true
+    AppScreen.COMPLETE_SCAN -> false
 }
 
 private enum class BluetoothUiState { ENABLED, DISABLED, UNSUPPORTED, PERMISSION_MISSING }
@@ -334,8 +412,7 @@ private fun TrackingScreen(
     onToggleVariantPanel: () -> Unit,
     onRetryAr: () -> Unit,
     onExport: (File) -> Unit,
-    bannerVisible: Boolean,
-    bannerContent: (@Composable () -> Unit)?,
+    adRequestContext: AdRequestContext,
 ) {
     val projection by arPoseSource.projection.collectAsStateWithLifecycle()
     var visualizations by remember { mutableStateOf(TrackingVisualizations()) }
@@ -386,6 +463,7 @@ private fun TrackingScreen(
     BackHandler(onBack = onLeaveSession)
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
         val layout = selectTrackingLayout(maxWidth.value, maxHeight.value)
+        val bannerWidthDp = maxWidth.value.roundToInt()
         val bottomControlsMaxHeight =
             maxHeight * if (layout == TrackingLayout.PORTRAIT_BOTTOM) 0.44f else 0.52f
         val camera: @Composable (Modifier) -> Unit = { modifier ->
@@ -426,13 +504,11 @@ private fun TrackingScreen(
                 camera(Modifier.weight(1f).fillMaxHeight())
                 Column(Modifier.width(320.dp).fillMaxHeight()) {
                     controls(Modifier.weight(1f).fillMaxWidth())
-                    bannerContent?.let {
-                        TrackingBannerSlot(
-                            visible = bannerVisible,
-                            sideRail = true,
-                            content = it,
-                        )
-                    }
+                    ManagedBannerSlot(
+                        surface = BannerSurface.TRACKING_RAIL,
+                        widthDp = 320,
+                        requestContext = adRequestContext,
+                    )
                 }
             }
             TrackingLayout.PORTRAIT_BOTTOM,
@@ -444,13 +520,15 @@ private fun TrackingScreen(
                         max = bottomControlsMaxHeight,
                     ),
                 )
-                bannerContent?.let {
-                    TrackingBannerSlot(
-                        visible = bannerVisible,
-                        sideRail = false,
-                        content = it,
-                    )
-                }
+                ManagedBannerSlot(
+                    surface = if (layout == TrackingLayout.PORTRAIT_BOTTOM) {
+                        BannerSurface.TRACKING_PORTRAIT
+                    } else {
+                        BannerSurface.TRACKING_NARROW_LANDSCAPE
+                    },
+                    widthDp = bannerWidthDp,
+                    requestContext = adRequestContext,
+                )
             }
         }
     }

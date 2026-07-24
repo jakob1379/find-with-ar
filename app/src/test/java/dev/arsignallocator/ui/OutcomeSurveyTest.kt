@@ -44,4 +44,44 @@ class OutcomeSurveyTest {
         assertEquals(TraceOutcome.YES, trackingExitOutcome(TrackingExit.FOUND_TARGET))
         assertNull(trackingExitOutcome(TrackingExit.DEVICES))
     }
+
+    @Test
+    fun `ads are limited to the picker and unobscured single target tracking`() {
+        DevicePage.entries.forEach { page ->
+            assertEquals(
+                page == DevicePage.PICKER,
+                currentScreenAllowsAds(AppScreen.DEVICES, page, overlayVisible = false),
+            )
+        }
+        assertEquals(
+            true,
+            currentScreenAllowsAds(
+                AppScreen.TRACKING,
+                DevicePage.PICKER,
+                overlayVisible = false,
+            ),
+        )
+        assertEquals(
+            true,
+            currentScreenAllowsAds(
+                AppScreen.DEBUG,
+                DevicePage.PICKER,
+                overlayVisible = false,
+            ),
+        )
+        assertEquals(
+            false,
+            currentScreenAllowsAds(
+                AppScreen.COMPLETE_SCAN,
+                DevicePage.PICKER,
+                overlayVisible = false,
+            ),
+        )
+        AppScreen.entries.forEach { screen ->
+            assertEquals(
+                false,
+                currentScreenAllowsAds(screen, DevicePage.PICKER, overlayVisible = true),
+            )
+        }
+    }
 }

@@ -55,8 +55,10 @@ import dev.arsignallocator.R
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.LocatorUiState
-import dev.arsignallocator.trace.TraceSummary
 import dev.arsignallocator.redactedDescription
+import dev.arsignallocator.monetization.BillingState
+import dev.arsignallocator.monetization.ConsentState
+import dev.arsignallocator.trace.TraceSummary
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
@@ -272,6 +274,9 @@ internal fun DevicePickerScreen(
     onSelect: (DeviceCandidate) -> Unit,
     onCompleteScan: () -> Unit,
     onSettings: () -> Unit,
+    onExport: (File) -> Unit,
+    onDelete: () -> Unit,
+    banner: @Composable () -> Unit = {},
 ) {
     var query by remember { mutableStateOf("") }
     var showUnnamed by remember { mutableStateOf(false) }
@@ -279,6 +284,7 @@ internal fun DevicePickerScreen(
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Nearby devices") }) },
+        bottomBar = banner,
     ) { padding ->
         LazyColumn(
             modifier = Modifier.padding(padding).fillMaxSize(),
@@ -374,6 +380,20 @@ internal fun DevicePickerScreen(
                     )
                 }
             }
+            state.lastTraceFile?.let { trace ->
+                item {
+                    Text("Last local trace", style = MaterialTheme.typography.titleSmall)
+                    FilledTonalButton(
+                        onClick = { onExport(trace) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Export")
+                    }
+                    TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
+                        Text("Delete local traces")
+                    }
+                }
+            }
             item {
                 Text(
                     "Low Energy targets must advertise. Classic targets must remain discoverable, " +
@@ -415,9 +435,14 @@ private fun signalLabel(rssiDbm: Double): String = when {
 
 @Composable
 internal fun SettingsScreen(
+    billingState: BillingState,
+    consentState: ConsentState,
+    variantMonetizationUi: VariantMonetizationUi,
+    privacyPolicyAvailable: Boolean,
     onBack: () -> Unit,
     onPro: () -> Unit,
     onDataHistory: () -> Unit,
+    onPrivacyPolicy: () -> Unit,
     onPrivacyChoices: () -> Unit,
     onHelp: () -> Unit,
     onContactSupport: () -> Unit,
@@ -425,11 +450,7 @@ internal fun SettingsScreen(
 ) {
     ShellScaffold("Settings", onBack) {
         item {
-            SettingsAction(
-                title = "Pro",
-                detail = "Complete Scan + no ads",
-                onClick = onPro,
-            )
+            ProSettingsCard(billingState, onOpen = onPro)
         }
         item {
             SettingsAction(
@@ -439,10 +460,11 @@ internal fun SettingsScreen(
             )
         }
         item {
-            SettingsAction(
-                title = "Privacy and ads",
-                detail = "Privacy policy and privacy choices",
-                onClick = onPrivacyChoices,
+            PrivacyAndAdsCard(
+                consentState = consentState,
+                privacyPolicyAvailable = privacyPolicyAvailable,
+                onPrivacyPolicy = onPrivacyPolicy,
+                onPrivacyChoices = onPrivacyChoices,
             )
         }
         item {
@@ -466,6 +488,7 @@ internal fun SettingsScreen(
                 onClick = onAbout,
             )
         }
+        item { VariantMonetizationSettings(variantMonetizationUi) }
     }
 }
 

@@ -3,6 +3,8 @@ package dev.arsignallocator.monetization
 import android.app.Activity
 import android.content.Context
 import android.util.Log
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import com.google.android.libraries.ads.mobile.sdk.MobileAds
 import com.google.android.libraries.ads.mobile.sdk.initialization.InitializationConfig
 import com.google.android.ump.ConsentInformation
@@ -46,9 +48,15 @@ private class UmpConsentSdk(context: Context) : ConsentSdk {
 
     override fun snapshot() = ConsentSnapshot(
         consentAllowsAds = consentInformation.canRequestAds(),
-        privacyOptionsRequired =
-            consentInformation.privacyOptionsRequirementStatus ==
-                ConsentInformation.PrivacyOptionsRequirementStatus.REQUIRED,
+        privacyOptionsRequirement = when (
+            consentInformation.privacyOptionsRequirementStatus
+        ) {
+            ConsentInformation.PrivacyOptionsRequirementStatus.REQUIRED ->
+                PrivacyOptionsRequirement.REQUIRED
+            ConsentInformation.PrivacyOptionsRequirementStatus.NOT_REQUIRED ->
+                PrivacyOptionsRequirement.NOT_REQUIRED
+            else -> PrivacyOptionsRequirement.UNKNOWN
+        },
     )
 
     override fun requestConsentInfoUpdate(
@@ -90,7 +98,11 @@ class AdsConsentController internal constructor(
         delay(consentRetryDelayMillis(it))
     },
     private val activityIsUsable: (Activity) -> Boolean = {
-        !it.isFinishing && !it.isDestroyed
+        activityIsStarted(
+            isFinishing = it.isFinishing,
+            isDestroyed = it.isDestroyed,
+            lifecycleState = (it as? LifecycleOwner)?.lifecycle?.currentState,
+        )
     },
     private val adsDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val log: (String) -> Unit = {},
@@ -127,6 +139,7 @@ class AdsConsentController internal constructor(
 
     fun gatherConsent(activity: Activity) {
         if (!consentRetries.begin()) return
+        _state.update { it.copy(isRefreshing = true, privacyError = null) }
         consentSdk.requestConsentInfoUpdate(
             activity,
             {
@@ -138,17 +151,28 @@ class AdsConsentController internal constructor(
                         initializeAdsIfAllowed()
                         if (error == null) {
                             consentRetries.finish(success = true)
+                            _state.update {
+                                it.copy(isRefreshing = false, privacyError = null)
+                            }
                         } else {
+                            _state.update { it.copy(privacyError = PRIVACY_UNAVAILABLE) }
                             retryConsent(activity)
                         }
                     }
                 } else {
                     consentRetries.finish(success = false)
+                    _state.update {
+                        it.copy(
+                            isRefreshing = false,
+                            privacyError = PRIVACY_UNAVAILABLE,
+                        )
+                    }
                 }
             },
             {
                 publishConsentState()
                 initializeAdsIfAllowed()
+                _state.update { it.copy(privacyError = PRIVACY_UNAVAILABLE) }
                 retryConsent(activity)
             },
         )
@@ -158,9 +182,28 @@ class AdsConsentController internal constructor(
     }
 
     fun showPrivacyOptions(activity: Activity, onComplete: (String?) -> Unit = {}) {
+        if (
+            _state.value.privacyOptionsRequirement !=
+            PrivacyOptionsRequirement.REQUIRED
+        ) {
+            onComplete(null)
+            return
+        }
+        if (!activityIsUsable(activity)) {
+            _state.update { it.copy(privacyError = PRIVACY_OPTIONS_UNAVAILABLE) }
+            onComplete(PRIVACY_OPTIONS_UNAVAILABLE)
+            return
+        }
+        _state.update { it.copy(isRefreshing = true, privacyError = null) }
         consentSdk.showPrivacyOptions(activity) { error ->
             publishConsentState()
             initializeAdsIfAllowed()
+            _state.update {
+                it.copy(
+                    isRefreshing = false,
+                    privacyError = error?.let { PRIVACY_OPTIONS_UNAVAILABLE },
+                )
+            }
             onComplete(error)
         }
     }
@@ -181,13 +224,23 @@ class AdsConsentController internal constructor(
     }
 
     private fun retryConsent(activity: Activity) {
-        val failure = consentRetries.finish(success = false) ?: return
+        val failure = consentRetries.finish(success = false)
+        if (failure == null) {
+            _state.update {
+                it.copy(isRefreshing = false, privacyError = PRIVACY_UNAVAILABLE)
+            }
+            return
+        }
         val activityReference = WeakReference(activity)
         scope.launch {
             retryDelay(failure)
-            val currentActivity = activityReference.get() ?: return@launch
-            if (activityIsUsable(currentActivity)) {
+            val currentActivity = activityReference.get()
+            if (currentActivity != null && activityIsUsable(currentActivity)) {
                 gatherConsent(currentActivity)
+            } else {
+                _state.update {
+                    it.copy(isRefreshing = false, privacyError = PRIVACY_UNAVAILABLE)
+                }
             }
         }
     }
@@ -218,5 +271,18 @@ class AdsConsentController internal constructor(
     companion object {
         private const val LOG_TAG = "AdsConsentController"
         private const val MAX_CONSENT_ATTEMPTS = 3
+        private const val PRIVACY_UNAVAILABLE =
+            "Google privacy status is unavailable. Ads will stay hidden until it can be checked."
+        private const val PRIVACY_OPTIONS_UNAVAILABLE =
+            "Google privacy choices are unavailable. Try again."
     }
 }
+
+internal fun activityIsStarted(
+    isFinishing: Boolean,
+    isDestroyed: Boolean,
+    lifecycleState: Lifecycle.State?,
+): Boolean =
+    !isFinishing &&
+        !isDestroyed &&
+        lifecycleState?.isAtLeast(Lifecycle.State.STARTED) == true

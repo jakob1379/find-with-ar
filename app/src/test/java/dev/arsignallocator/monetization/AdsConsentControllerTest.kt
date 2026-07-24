@@ -1,6 +1,7 @@
 package dev.arsignallocator.monetization
 
 import android.app.Activity
+import androidx.lifecycle.Lifecycle
 import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -35,7 +36,10 @@ class AdsConsentControllerTest {
             )
 
             assertTrue(controller.state.value.consentAllowsAds)
-            assertTrue(controller.state.value.privacyOptionsRequired)
+            assertEquals(
+                PrivacyOptionsRequirement.REQUIRED,
+                controller.state.value.privacyOptionsRequirement,
+            )
             controller.setEligible(true)
             controller.gatherConsent(testActivity())
             sdk.failUpdate()
@@ -70,7 +74,10 @@ class AdsConsentControllerTest {
             assertEquals(1, sdk.updateRequests)
             assertEquals(0, sdk.formRequests)
             assertTrue(controller.state.value.consentAllowsAds)
-            assertTrue(controller.state.value.privacyOptionsRequired)
+            assertEquals(
+                PrivacyOptionsRequirement.REQUIRED,
+                controller.state.value.privacyOptionsRequirement,
+            )
             assertTrue(controller.state.value.canRequestAds)
             assertEquals(1, initializations)
         }
@@ -126,7 +133,10 @@ class AdsConsentControllerTest {
             initializer = AdsSdkInitializer { it() },
         )
         assertTrue(recreated.state.value.consentAllowsAds)
-        assertTrue(recreated.state.value.privacyOptionsRequired)
+        assertEquals(
+            PrivacyOptionsRequirement.REQUIRED,
+            recreated.state.value.privacyOptionsRequirement,
+        )
         assertFalse(recreated.state.value.adsSdkReady)
     }
 
@@ -147,6 +157,11 @@ class AdsConsentControllerTest {
         assertEquals(3, sdk.formRequests)
         controller.gatherConsent(activity)
         assertEquals(3, sdk.updateRequests)
+        assertFalse(controller.state.value.isRefreshing)
+        assertEquals(
+            "Google privacy status is unavailable. Ads will stay hidden until it can be checked.",
+            controller.state.value.privacyError,
+        )
     }
 
     @Test
@@ -158,6 +173,73 @@ class AdsConsentControllerTest {
         sdk.succeedUpdate()
 
         assertEquals(0, sdk.formRequests)
+        assertFalse(controller.state.value.isRefreshing)
+        assertTrue(controller.state.value.privacyError != null)
+    }
+
+    @Test
+    fun `production activity usability requires a started lifecycle`() {
+        assertFalse(activityIsStarted(false, false, null))
+        assertFalse(activityIsStarted(false, false, Lifecycle.State.CREATED))
+        assertTrue(activityIsStarted(false, false, Lifecycle.State.STARTED))
+        assertTrue(activityIsStarted(false, false, Lifecycle.State.RESUMED))
+        assertFalse(activityIsStarted(true, false, Lifecycle.State.RESUMED))
+        assertFalse(activityIsStarted(false, true, Lifecycle.State.RESUMED))
+    }
+
+    @Test
+    fun `consent success callback does not open a form after activity stops`() = runTest {
+        val sdk = FakeConsentSdk(ConsentSnapshot(false, false))
+        var started = true
+        val controller = controller(sdk, activityIsUsable = { started })
+        val activity = testActivity()
+
+        controller.gatherConsent(activity)
+        started = false
+        sdk.succeedUpdate()
+        advanceUntilIdle()
+
+        assertEquals(0, sdk.formRequests)
+        assertEquals(1, sdk.updateRequests)
+        assertFalse(controller.state.value.isRefreshing)
+    }
+
+    @Test
+    fun `consent retry does not issue another request after activity stops`() = runTest {
+        val sdk = FakeConsentSdk(ConsentSnapshot(false, false))
+        var started = true
+        val controller = controller(sdk, activityIsUsable = { started })
+
+        controller.gatherConsent(testActivity())
+        sdk.failUpdate()
+        started = false
+        advanceUntilIdle()
+
+        assertEquals(1, sdk.updateRequests)
+        assertEquals(0, sdk.formRequests)
+        assertFalse(controller.state.value.isRefreshing)
+    }
+
+    @Test
+    fun `fresh consent failure keeps privacy requirement unknown`() = runTest {
+        val sdk = FakeConsentSdk(
+            ConsentSnapshot(false, PrivacyOptionsRequirement.UNKNOWN),
+        )
+        val controller = controller(sdk)
+        val activity = testActivity()
+
+        controller.gatherConsent(activity)
+        repeat(3) {
+            sdk.failUpdate()
+            advanceUntilIdle()
+        }
+
+        assertEquals(
+            PrivacyOptionsRequirement.UNKNOWN,
+            controller.state.value.privacyOptionsRequirement,
+        )
+        assertFalse(controller.state.value.isRefreshing)
+        assertTrue(controller.state.value.privacyError != null)
     }
 
     @Test
@@ -223,14 +305,17 @@ class AdsConsentControllerTest {
         consentUpdated.join()
 
         assertFalse(controller.state.value.consentAllowsAds)
-        assertFalse(controller.state.value.privacyOptionsRequired)
+        assertEquals(
+            PrivacyOptionsRequirement.NOT_REQUIRED,
+            controller.state.value.privacyOptionsRequirement,
+        )
         assertTrue(controller.state.value.adsSdkReady)
         assertFalse(controller.state.value.canRequestAds)
     }
 
     @Test
     fun `privacy options republishes the snapshot and forwards SDK errors`() = runTest {
-        val sdk = FakeConsentSdk(ConsentSnapshot(false, false))
+        val sdk = FakeConsentSdk(ConsentSnapshot(false, true))
         val controller = controller(sdk)
         var reportedError: String? = null
 
@@ -240,7 +325,24 @@ class AdsConsentControllerTest {
 
         assertEquals("privacy form failed", reportedError)
         assertTrue(controller.state.value.consentAllowsAds)
-        assertTrue(controller.state.value.privacyOptionsRequired)
+        assertEquals(
+            PrivacyOptionsRequirement.REQUIRED,
+            controller.state.value.privacyOptionsRequirement,
+        )
+        assertEquals(
+            "Google privacy choices are unavailable. Try again.",
+            controller.state.value.privacyError,
+        )
+    }
+
+    @Test
+    fun `privacy options never open unless UMP requires them`() = runTest {
+        val sdk = FakeConsentSdk(ConsentSnapshot(false, false))
+        val controller = controller(sdk)
+
+        controller.showPrivacyOptions(testActivity())
+
+        assertEquals(0, sdk.privacyRequests)
     }
 
     @Test
@@ -285,6 +387,7 @@ class AdsConsentControllerTest {
     ) : ConsentSdk {
         var updateRequests = 0
         var formRequests = 0
+        var privacyRequests = 0
         private var updateSuccess: (() -> Unit)? = null
         private var updateFailure: (() -> Unit)? = null
         private var formComplete: ((String?) -> Unit)? = null
@@ -312,6 +415,7 @@ class AdsConsentControllerTest {
         }
 
         override fun showPrivacyOptions(activity: Activity, onComplete: (String?) -> Unit) {
+            privacyRequests += 1
             privacyComplete = onComplete
         }
 

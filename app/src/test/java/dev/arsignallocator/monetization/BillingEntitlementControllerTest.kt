@@ -29,14 +29,23 @@ class BillingEntitlementControllerTest {
         sdk.replyProduct(product())
 
         assertTrue(controller.launchPurchase(testActivity()))
+        assertTrue(controller.state.value.purchaseInProgress)
         sdk.emitPurchaseUpdate(purchase(state = Purchase.PurchaseState.PENDING))
         assertEquals(EntitlementState.PENDING, controller.state.value.entitlement)
+        assertFalse(controller.state.value.purchaseInProgress)
+
+        controller.refresh()
+        sdk.replyPurchases()
+        assertEquals(EntitlementState.FREE, controller.state.value.entitlement)
+        assertTrue(controller.launchPurchase(testActivity()))
         sdk.emitPurchaseUpdate(
             resultCode = BillingClient.BillingResponseCode.USER_CANCELED,
             purchases = null,
         )
+        assertFalse(controller.state.value.purchaseInProgress)
         assertNull(controller.state.value.retryableError)
 
+        assertTrue(controller.launchPurchase(testActivity()))
         sdk.emitPurchaseUpdate(purchase())
         runCurrent()
         assertEquals(EntitlementState.PRO_CONFIRMED, controller.state.value.entitlement)
@@ -45,6 +54,47 @@ class BillingEntitlementControllerTest {
         advanceUntilIdle()
         assertNull(controller.state.value.retryableError)
     }
+
+    @Test
+    fun `purchase launch error is retryable and a retry returns to busy`() = runTest {
+        val sdk = FakeBillingSdk()
+        val controller = controller(sdk)
+        controller.refresh()
+        sdk.replyPurchases()
+        sdk.replyProduct(product())
+        sdk.launchResult = StoreBillingResult(BillingClient.BillingResponseCode.ERROR)
+
+        assertFalse(controller.launchPurchase(testActivity()))
+        assertFalse(controller.state.value.purchaseInProgress)
+        assertEquals(
+            "Google Play Billing is unavailable (6). Try again.",
+            controller.state.value.retryableError,
+        )
+
+        sdk.launchResult = StoreBillingResult(BillingClient.BillingResponseCode.OK)
+        assertTrue(controller.launchPurchase(testActivity()))
+        assertTrue(controller.state.value.purchaseInProgress)
+        assertNull(controller.state.value.retryableError)
+    }
+
+    @Test
+    fun `localized price cannot launch purchase before authoritative ownership wins the race`() =
+        runTest {
+            val sdk = FakeBillingSdk()
+            val controller = controller(sdk)
+            controller.refresh()
+            sdk.replyProduct(product())
+
+            assertEquals("€4.99", controller.state.value.localizedPrice)
+            assertFalse(controller.state.value.isAuthoritative)
+            assertFalse(controller.launchPurchase(testActivity()))
+            assertEquals(2, sdk.purchaseQueries.size)
+
+            sdk.replyPurchasesAt(1)
+
+            assertTrue(controller.state.value.isAuthoritative)
+            assertTrue(controller.launchPurchase(testActivity()))
+        }
 
     @Test
     fun `cached offline restore absent and refund states reconcile authoritatively`() = runTest {
@@ -230,6 +280,7 @@ class BillingEntitlementControllerTest {
         val controller = controller(sdk, mainThreadCheck = { checks += 1 })
 
         controller.refresh()
+        sdk.replyPurchases()
         sdk.replyProduct(product())
         controller.launchPurchase(testActivity())
         controller.close()

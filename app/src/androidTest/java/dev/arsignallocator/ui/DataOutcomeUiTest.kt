@@ -17,6 +17,10 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso
 import dev.arsignallocator.R
 import dev.arsignallocator.TRACE_CONTENT_DISCLOSURE
+import dev.arsignallocator.monetization.BillingState
+import dev.arsignallocator.monetization.ConsentState
+import dev.arsignallocator.monetization.EntitlementState
+import dev.arsignallocator.monetization.PrivacyOptionsRequirement
 import dev.arsignallocator.trace.TraceMode
 import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.trace.TraceSummary
@@ -215,16 +219,56 @@ class DataOutcomeUiTest {
     }
 
     @Test
-    fun aboutIsReachableFromSettings() {
-        var reached = false
+    fun combinedSettingsRoutesEveryProductionDestination() {
+        val reached = mutableSetOf<String>()
         compose.setContent {
             MaterialTheme {
-                SettingsScreen({}, {}, {}, {}, {}, {}, { reached = true })
+                SettingsScreen(
+                    billingState = BillingState(
+                        entitlement = EntitlementState.FREE,
+                        isAuthoritative = true,
+                        localizedPrice = "DKK 37,00",
+                    ),
+                    consentState = ConsentState(
+                        privacyOptionsRequirement = PrivacyOptionsRequirement.REQUIRED,
+                    ),
+                    variantMonetizationUi = VariantMonetizationUi(
+                        effectiveBillingState = BillingState(EntitlementState.FREE),
+                        allowAds = false,
+                        overrideState = null,
+                        onOverrideChange = {},
+                        onAllowAdsChange = {},
+                    ),
+                    privacyPolicyAvailable = true,
+                    onBack = {},
+                    onPro = { reached += "pro" },
+                    onDataHistory = { reached += "data" },
+                    onPrivacyPolicy = { reached += "privacy" },
+                    onPrivacyChoices = { reached += "choices" },
+                    onHelp = { reached += "help" },
+                    onContactSupport = { reached += "support" },
+                    onAbout = { reached += "about" },
+                )
             }
         }
 
-        compose.onNodeWithText("About").performScrollTo().performClick()
-        compose.runOnIdle { assertTrue(reached) }
+        listOf(
+            "Pro — Complete Scan + no ads",
+            "Data",
+            "Privacy policy",
+            "Google privacy choices",
+            "Help and safety",
+            "Contact support",
+            "About",
+        ).forEach {
+            compose.onNodeWithText(it).performScrollTo().performClick()
+        }
+        compose.runOnIdle {
+            assertEquals(
+                setOf("pro", "data", "privacy", "choices", "help", "support", "about"),
+                reached,
+            )
+        }
     }
 
     @Test

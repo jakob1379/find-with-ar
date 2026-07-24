@@ -8,19 +8,20 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
 import androidx.core.content.FileProvider
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
 import dev.arsignallocator.ar.ArCorePoseSource
 import dev.arsignallocator.ble.AndroidBleScanner
 import dev.arsignallocator.core.ElapsedRealtimeClock
 import dev.arsignallocator.localization.LocalizationAdapter
 import dev.arsignallocator.monetization.AdsEligibility
 import dev.arsignallocator.monetization.AdsConsentController
-import dev.arsignallocator.monetization.BillingState
 import dev.arsignallocator.monetization.BillingEntitlementController
 import dev.arsignallocator.monetization.EntitlementState
 import dev.arsignallocator.monetization.canInitializeAds
@@ -28,8 +29,8 @@ import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
 import dev.arsignallocator.trace.TraceSummary
 import dev.arsignallocator.ui.SignalLocatorApp
+import dev.arsignallocator.ui.rememberVariantMonetizationUi
 import java.io.File
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var pendingExport: File? = null
@@ -37,6 +38,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var billing: BillingEntitlementController
     private lateinit var consent: AdsConsentController
     private lateinit var viewModel: LocatorViewModel
+    @Volatile
+    private var effectiveCompleteScanEntitlement = EntitlementState.FREE
     private val exportLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/x-ndjson"),
     ) { uri ->
@@ -54,13 +57,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         consent = AdsConsentController(applicationContext, lifecycleScope)
-        consent.gatherConsent(this)
         billing = BillingEntitlementController(applicationContext)
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                billing.state.collect(::updateAdsEligibility)
-            }
-        }
         billing.refresh()
         traceDirectory = File(filesDir, "traces")
         pendingExport = completedTraceAt(
@@ -82,7 +79,7 @@ class MainActivity : ComponentActivity() {
                         clock = ElapsedRealtimeClock,
                         appVersion = BuildConfig.VERSION_NAME,
                         deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
-                        completeScanEntitlement = { billing.state.value.entitlement },
+                        completeScanEntitlement = { effectiveCompleteScanEntitlement },
                         locationEngineFactory = { LocalizationAdapter() },
                         synchronizerFactory = { SampleSynchronizer() },
                     ) as T
@@ -93,26 +90,44 @@ class MainActivity : ComponentActivity() {
         viewModel.bindPoseSource(arPoseSource)
 
         setContent {
+            val storeBillingState by billing.state.collectAsStateWithLifecycle()
+            val consentState by consent.state.collectAsStateWithLifecycle()
+            val variantMonetizationUi = rememberVariantMonetizationUi(storeBillingState)
+            val billingState = variantMonetizationUi.effectiveBillingState
+            SideEffect {
+                effectiveCompleteScanEntitlement = billingState.entitlement
+            }
+            LaunchedEffect(
+                billingState.entitlement,
+                billingState.isAuthoritative,
+                variantMonetizationUi.allowAds,
+            ) {
+                consent.setEligible(
+                    canInitializeAds(
+                        AdsEligibility(
+                            adsEnabled = BuildConfig.ADS_ENABLED,
+                            isDebugBuild = BuildConfig.DEBUG,
+                            debugTestAdsEnabled = variantMonetizationUi.allowAds,
+                            entitlement = billingState.entitlement,
+                            billingAuthoritative = billingState.isAuthoritative,
+                        ),
+                    ),
+                )
+            }
             SignalLocatorApp(
                 viewModel = viewModel,
                 arPoseSource = arPoseSource,
+                billingState = billingState,
+                consentState = consentState,
+                variantMonetizationUi = variantMonetizationUi,
                 onExport = ::exportTrace,
                 onShare = ::shareTrace,
                 onSendSupport = ::sendSupport,
-                onCompleteScanPurchase = {
-                    if (billing.state.value.entitlement == EntitlementState.PENDING) {
-                        showShellMessage("Your Pro purchase is still pending")
-                    } else if (!billing.launchPurchase(this)) {
-                        showShellMessage(
-                            billing.state.value.retryableError
-                                ?: "Pro purchase is temporarily unavailable",
-                        )
-                    }
-                },
-                onPro = { showShellMessage("Pro purchases are not connected in this build") },
-                onPrivacyChoices = {
-                    showShellMessage("Privacy choices are not connected in this build")
-                },
+                onPurchasePro = ::purchasePro,
+                onRestorePro = billing::refresh,
+                privacyPolicyAvailable = BuildConfig.PRIVACY_URL.isNotBlank(),
+                onPrivacyPolicy = ::openPrivacyPolicy,
+                onPrivacyChoices = { consent.showPrivacyOptions(this) },
             )
         }
     }
@@ -121,9 +136,21 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
+    private fun purchasePro() {
+        if (billing.state.value.entitlement == EntitlementState.PENDING) {
+            showShellMessage("Your Pro purchase is still pending")
+        } else if (!billing.launchPurchase(this)) {
+            showShellMessage(
+                billing.state.value.retryableError
+                    ?: "Pro purchase is temporarily unavailable",
+            )
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (::billing.isInitialized) billing.refresh()
+        if (::consent.isInitialized) consent.gatherConsent(this)
     }
 
     override fun onStart() {
@@ -148,17 +175,17 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun updateAdsEligibility(state: BillingState) {
-        val eligible = canInitializeAds(
-            AdsEligibility(
-                adsEnabled = BuildConfig.ADS_ENABLED,
-                isDebugBuild = BuildConfig.DEBUG,
-                debugTestAdsEnabled = BuildConfig.DEBUG_TEST_ADS_ENABLED,
-                entitlement = state.entitlement,
-                billingAuthoritative = state.isAuthoritative,
-            ),
-        )
-        consent.setEligible(eligible)
+    private fun openPrivacyPolicy() {
+        val url = BuildConfig.PRIVACY_URL
+        if (url.isBlank()) {
+            showShellMessage("Privacy policy unavailable in this build")
+            return
+        }
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }.onFailure {
+            showShellMessage("No browser is available to open the privacy policy")
+        }
     }
 
     private fun exportTrace(file: File) {

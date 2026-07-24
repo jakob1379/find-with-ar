@@ -31,7 +31,7 @@ class BannerAdLoaderTest {
                     entitlement = EntitlementState.PRO_CONFIRMED,
                 ),
             ),
-            allowed.copy(completeScan = true),
+            allowed.copy(screenAllowsAds = false),
         ).forEach { disallowed ->
             loader.update(testActivity(), 360, BannerFormat.ANCHORED_ADAPTIVE, allowed, {}, {})
             val banner = factory.created.last()
@@ -88,6 +88,86 @@ class BannerAdLoaderTest {
         assertTrue(failed.removed)
         assertEquals(1, failures)
         assertEquals(2, factory.created.size)
+    }
+
+    @Test
+    fun `clear handles navigation and dispose permanently closes the loader`() {
+        val factory = FakeBannerFactory()
+        val loader = BannerAdLoader(TestLifecycleOwner(), factory)
+
+        loader.update(
+            testActivity(),
+            360,
+            BannerFormat.ANCHORED_ADAPTIVE,
+            allowedRequest(),
+            {},
+            {},
+        )
+        val navigatingAway = factory.created.single()
+        loader.clear()
+
+        assertEquals(1, navigatingAway.destroyCalls)
+        assertTrue(navigatingAway.removed)
+
+        loader.update(
+            testActivity(),
+            360,
+            BannerFormat.ANCHORED_ADAPTIVE,
+            allowedRequest(),
+            {},
+            {},
+        )
+        val disposing = factory.created.last()
+        loader.dispose()
+        loader.update(
+            testActivity(),
+            320,
+            BannerFormat.FIXED_320_BY_50,
+            allowedRequest(),
+            {},
+            {},
+        )
+
+        assertEquals(1, disposing.destroyCalls)
+        assertEquals(2, factory.created.size)
+    }
+
+    @Test
+    fun `Complete Scan never reaches the banner factory across every runtime state`() {
+        val factory = FakeBannerFactory()
+        val loader = BannerAdLoader(TestLifecycleOwner(), factory)
+
+        for (isDebug in listOf(false, true)) {
+            for (testAds in listOf(false, true)) {
+                for (consent in listOf(false, true)) {
+                    for (ready in listOf(false, true)) {
+                        for (entitlement in EntitlementState.entries) {
+                            loader.update(
+                                testActivity(),
+                                360,
+                                BannerFormat.ANCHORED_ADAPTIVE,
+                                AdRequestContext(
+                                    eligibility = AdsEligibility(
+                                        adsEnabled = true,
+                                        isDebugBuild = isDebug,
+                                        debugTestAdsEnabled = testAds,
+                                        entitlement = entitlement,
+                                        billingAuthoritative = true,
+                                    ),
+                                    screenAllowsAds = false,
+                                    consentAllowsAds = consent,
+                                    adsSdkReady = ready,
+                                ),
+                                {},
+                                {},
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        assertTrue(factory.created.isEmpty())
     }
 
     @Test
@@ -200,7 +280,7 @@ class BannerAdLoaderTest {
                 entitlement = EntitlementState.FREE,
                 billingAuthoritative = true,
             ),
-            completeScan = false,
+            screenAllowsAds = true,
             consentAllowsAds = true,
             adsSdkReady = true,
         )

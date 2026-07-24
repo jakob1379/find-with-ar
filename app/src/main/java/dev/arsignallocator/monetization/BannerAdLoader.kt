@@ -31,6 +31,21 @@ internal fun interface ManagedBannerAdFactory {
     fun create(activity: Activity, widthDp: Int, format: BannerFormat): ManagedBannerAd
 }
 
+internal interface ManagedBannerLoader {
+    fun update(
+        activity: Activity,
+        widthDp: Int,
+        format: BannerFormat,
+        requestContext: AdRequestContext,
+        onLoaded: (AdView) -> Unit,
+        onFailed: () -> Unit,
+    )
+
+    fun clear()
+
+    fun dispose()
+}
+
 private object GoogleBannerAdFactory : ManagedBannerAdFactory {
     override fun create(
         activity: Activity,
@@ -83,19 +98,20 @@ private class GoogleBannerAd(
 class BannerAdLoader internal constructor(
     owner: LifecycleOwner,
     private val factory: ManagedBannerAdFactory,
-) : DefaultLifecycleObserver {
+) : DefaultLifecycleObserver, ManagedBannerLoader {
+    private val lifecycle = owner.lifecycle
     private var current: ManagedBannerAd? = null
     private var request: Pair<Int, BannerFormat>? = null
-    private var destroyed = owner.lifecycle.currentState == Lifecycle.State.DESTROYED
+    private var destroyed = lifecycle.currentState == Lifecycle.State.DESTROYED
 
     constructor(owner: LifecycleOwner) : this(owner, GoogleBannerAdFactory)
 
     init {
-        if (!destroyed) owner.lifecycle.addObserver(this)
+        if (!destroyed) lifecycle.addObserver(this)
     }
 
     @MainThread
-    fun update(
+    override fun update(
         activity: Activity,
         widthDp: Int,
         format: BannerFormat,
@@ -133,14 +149,22 @@ class BannerAdLoader internal constructor(
 
     @MainThread
     override fun onDestroy(owner: LifecycleOwner) {
-        destroyed = true
-        clear()
+        dispose()
     }
 
-    private fun clear() {
+    @MainThread
+    override fun clear() {
         val banner = current
         current = null
         request = null
         banner?.destroyAndRemove()
+    }
+
+    @MainThread
+    override fun dispose() {
+        if (destroyed) return
+        destroyed = true
+        lifecycle.removeObserver(this)
+        clear()
     }
 }

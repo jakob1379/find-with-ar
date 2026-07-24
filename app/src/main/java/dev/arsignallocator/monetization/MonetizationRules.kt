@@ -141,15 +141,36 @@ fun acknowledgementRetryDelayMillis(retry: Int): Long =
 
 data class ConsentState(
     val consentAllowsAds: Boolean = false,
-    val privacyOptionsRequired: Boolean = false,
+    val privacyOptionsRequirement: PrivacyOptionsRequirement =
+        PrivacyOptionsRequirement.UNKNOWN,
     val adsSdkReady: Boolean = false,
     val canRequestAds: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val privacyError: String? = null,
 )
+
+enum class PrivacyOptionsRequirement {
+    UNKNOWN,
+    NOT_REQUIRED,
+    REQUIRED,
+}
 
 data class ConsentSnapshot(
     val consentAllowsAds: Boolean,
-    val privacyOptionsRequired: Boolean,
-)
+    val privacyOptionsRequirement: PrivacyOptionsRequirement,
+) {
+    constructor(
+        consentAllowsAds: Boolean,
+        privacyOptionsRequired: Boolean,
+    ) : this(
+        consentAllowsAds,
+        if (privacyOptionsRequired) {
+            PrivacyOptionsRequirement.REQUIRED
+        } else {
+            PrivacyOptionsRequirement.NOT_REQUIRED
+        },
+    )
+}
 
 fun updatedConsentState(
     previous: ConsentState,
@@ -158,12 +179,17 @@ fun updatedConsentState(
     adsSdkReady: Boolean,
 ): ConsentState {
     val consentAllowsAds = snapshot?.consentAllowsAds ?: previous.consentAllowsAds
+    val privacyOptionsRequirement =
+        snapshot?.privacyOptionsRequirement
+            ?.takeUnless { it == PrivacyOptionsRequirement.UNKNOWN }
+            ?: previous.privacyOptionsRequirement
     return ConsentState(
         consentAllowsAds = consentAllowsAds,
-        privacyOptionsRequired =
-            snapshot?.privacyOptionsRequired ?: previous.privacyOptionsRequired,
+        privacyOptionsRequirement = privacyOptionsRequirement,
         adsSdkReady = adsSdkReady,
         canRequestAds = adsEligible && consentAllowsAds && adsSdkReady,
+        isRefreshing = previous.isRefreshing,
+        privacyError = previous.privacyError,
     )
 }
 
@@ -213,7 +239,7 @@ fun canInitializeAds(eligibility: AdsEligibility): Boolean =
 
 data class AdRequestContext(
     val eligibility: AdsEligibility,
-    val completeScan: Boolean,
+    val screenAllowsAds: Boolean,
     val consentAllowsAds: Boolean,
     val adsSdkReady: Boolean,
 )
@@ -222,4 +248,48 @@ fun canRequestBanner(context: AdRequestContext): Boolean =
     canInitializeAds(context.eligibility) &&
         context.consentAllowsAds &&
         context.adsSdkReady &&
-        !context.completeScan
+        context.screenAllowsAds
+
+enum class CompleteScanRoute {
+    START,
+    SHOW_PRO,
+}
+
+fun completeScanRoute(entitlement: EntitlementState): CompleteScanRoute = when (entitlement) {
+    EntitlementState.PRO_CACHED,
+    EntitlementState.PRO_CONFIRMED,
+    -> CompleteScanRoute.START
+    EntitlementState.FREE,
+    EntitlementState.PENDING,
+    -> CompleteScanRoute.SHOW_PRO
+}
+
+enum class BannerSurface {
+    PICKER,
+    TRACKING_PORTRAIT,
+    TRACKING_NARROW_LANDSCAPE,
+    TRACKING_RAIL,
+    SETTINGS,
+    HISTORY,
+    SURVEY,
+    PERMISSIONS,
+    ONBOARDING,
+    PURCHASE,
+    COMPLETE_SCAN,
+}
+
+fun bannerFormat(surface: BannerSurface): BannerFormat? = when (surface) {
+    BannerSurface.PICKER,
+    BannerSurface.TRACKING_PORTRAIT,
+    BannerSurface.TRACKING_NARROW_LANDSCAPE,
+    -> BannerFormat.ANCHORED_ADAPTIVE
+    BannerSurface.TRACKING_RAIL -> BannerFormat.FIXED_320_BY_50
+    BannerSurface.SETTINGS,
+    BannerSurface.HISTORY,
+    BannerSurface.SURVEY,
+    BannerSurface.PERMISSIONS,
+    BannerSurface.ONBOARDING,
+    BannerSurface.PURCHASE,
+    BannerSurface.COMPLETE_SCAN,
+    -> null
+}

@@ -7,6 +7,45 @@ import org.junit.Test
 
 class MonetizationRulesTest {
     @Test
+    fun `Complete Scan starts only for cached or confirmed Pro`() {
+        assertEquals(CompleteScanRoute.SHOW_PRO, completeScanRoute(EntitlementState.FREE))
+        assertEquals(CompleteScanRoute.SHOW_PRO, completeScanRoute(EntitlementState.PENDING))
+        assertEquals(
+            CompleteScanRoute.START,
+            completeScanRoute(EntitlementState.PRO_CACHED),
+        )
+        assertEquals(
+            CompleteScanRoute.START,
+            completeScanRoute(EntitlementState.PRO_CONFIRMED),
+        )
+    }
+
+    @Test
+    fun `banner surfaces route only picker and single target formats`() {
+        assertEquals(BannerFormat.ANCHORED_ADAPTIVE, bannerFormat(BannerSurface.PICKER))
+        assertEquals(
+            BannerFormat.ANCHORED_ADAPTIVE,
+            bannerFormat(BannerSurface.TRACKING_PORTRAIT),
+        )
+        assertEquals(
+            BannerFormat.ANCHORED_ADAPTIVE,
+            bannerFormat(BannerSurface.TRACKING_NARROW_LANDSCAPE),
+        )
+        assertEquals(
+            BannerFormat.FIXED_320_BY_50,
+            bannerFormat(BannerSurface.TRACKING_RAIL),
+        )
+        (
+            BannerSurface.entries - setOf(
+                BannerSurface.PICKER,
+                BannerSurface.TRACKING_PORTRAIT,
+                BannerSurface.TRACKING_NARROW_LANDSCAPE,
+                BannerSurface.TRACKING_RAIL,
+            )
+        ).forEach { assertEquals(null, bannerFormat(it)) }
+    }
+
+    @Test
     fun `authoritative pending query revokes cached Pro`() {
         assertEquals(
             EntitlementDecision(EntitlementState.PENDING, cachePro = false),
@@ -230,7 +269,7 @@ class MonetizationRulesTest {
                 for (debugTestAdsEnabled in booleans) {
                     for (billingAuthoritative in booleans) {
                         for (entitlement in EntitlementState.entries) {
-                            for (completeScan in booleans) {
+                            for (screenAllowsAds in booleans) {
                                 for (consentAllowsAds in booleans) {
                                     for (adsSdkReady in booleans) {
                                         val request = AdRequestContext(
@@ -241,7 +280,7 @@ class MonetizationRulesTest {
                                                 entitlement = entitlement,
                                                 billingAuthoritative = billingAuthoritative,
                                             ),
-                                            completeScan = completeScan,
+                                            screenAllowsAds = screenAllowsAds,
                                             consentAllowsAds = consentAllowsAds,
                                             adsSdkReady = adsSdkReady,
                                         )
@@ -250,7 +289,7 @@ class MonetizationRulesTest {
                                             (!isDebugBuild || debugTestAdsEnabled) &&
                                             entitlement != EntitlementState.PRO_CACHED &&
                                             entitlement != EntitlementState.PRO_CONFIRMED &&
-                                            !completeScan &&
+                                            screenAllowsAds &&
                                             consentAllowsAds &&
                                             adsSdkReady
 
@@ -273,14 +312,17 @@ class MonetizationRulesTest {
             previous = ConsentState(),
             snapshot = ConsentSnapshot(
                 consentAllowsAds = true,
-                privacyOptionsRequired = true,
+                privacyOptionsRequirement = PrivacyOptionsRequirement.REQUIRED,
             ),
             adsEligible = false,
             adsSdkReady = false,
         )
 
         assertTrue(valid.consentAllowsAds)
-        assertTrue(valid.privacyOptionsRequired)
+        assertEquals(
+            PrivacyOptionsRequirement.REQUIRED,
+            valid.privacyOptionsRequirement,
+        )
         assertFalse(valid.canRequestAds)
         assertEquals(
             valid,
@@ -298,6 +340,18 @@ class MonetizationRulesTest {
                 adsEligible = true,
                 adsSdkReady = true,
             ).canRequestAds,
+        )
+        assertEquals(
+            PrivacyOptionsRequirement.REQUIRED,
+            updatedConsentState(
+                previous = valid,
+                snapshot = ConsentSnapshot(
+                    consentAllowsAds = false,
+                    privacyOptionsRequirement = PrivacyOptionsRequirement.UNKNOWN,
+                ),
+                adsEligible = false,
+                adsSdkReady = false,
+            ).privacyOptionsRequirement,
         )
     }
 
