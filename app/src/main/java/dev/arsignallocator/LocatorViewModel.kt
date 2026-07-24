@@ -15,6 +15,7 @@ import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.CompleteScanDevice
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.DeviceKey
+import dev.arsignallocator.model.ESTIMATE_STATUS_COLLECTING
 import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
 import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_MULTIMODAL
 import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_UNIMODAL
@@ -28,6 +29,8 @@ import dev.arsignallocator.monetization.EntitlementState
 import dev.arsignallocator.monetization.allowsCompleteScan
 import dev.arsignallocator.ar.PoseSource
 import dev.arsignallocator.sync.SampleSynchronizer
+import dev.arsignallocator.trace.TraceEventCode
+import dev.arsignallocator.trace.TraceFinalizationResult
 import dev.arsignallocator.trace.TraceRecorder
 import dev.arsignallocator.trace.TraceMode
 import dev.arsignallocator.trace.TraceOutcome
@@ -80,11 +83,20 @@ class LocatorViewModel(
     private var lostTargetJob: Job? = null
     private var poseJob: Job? = null
     private var arStatusJob: Job? = null
+    @Volatile
     private var traceActive = false
     private var appInForeground = true
     @Volatile
     private var traceOperation = 0L
+    @Volatile
+    private var activeTraceOperation: Long? = null
     private val traceMutex = Mutex()
+    private var tracedArState: ArRuntimeStatus? = null
+    private var tracedScannerState: String? = null
+    private val tracedEstimatorStates =
+        mutableMapOf<Pair<DeviceKey, BluetoothTransport>, String>()
+    private val tracedLostSignals =
+        mutableSetOf<Pair<DeviceKey, BluetoothTransport>>()
     private val candidateAccumulators = linkedMapOf<DeviceKey, CandidateAccumulator>()
     private var candidateOrder = emptyList<DeviceKey>()
     private var lastBreadcrumb: PoseObservation? = null
@@ -127,6 +139,7 @@ class LocatorViewModel(
                 _state.update { current ->
                     current.copy(arStatus = status, guidance = guidance(current.copy(arStatus = status)))
                 }
+                recordArState(status.status, status.recoverable)
             }
         }
     }
@@ -225,10 +238,16 @@ class LocatorViewModel(
                 traceIo {
                     if (operation != traceOperation) return@traceIo
                     traceRecorder.start(appVersion, deviceModel, candidate.handle)
+                    if (operation == traceOperation) {
+                        beginTrace(operation, SCANNER_SINGLE_TARGET)
+                    }
                 }
             }.exceptionOrNull()?.let { TRACE_START_ERROR }
             if (operation != traceOperation) return@launch
             traceActive = traceError == null
+            if (traceError != null && activeTraceOperation == operation) {
+                activeTraceOperation = null
+            }
             _state.update {
                 it.copy(recoverableError = traceError)
             }
@@ -287,10 +306,16 @@ class LocatorViewModel(
                         deviceModel,
                         TraceMode.COMPLETE_SCAN,
                     )
+                    if (operation == traceOperation) {
+                        beginTrace(operation, SCANNER_COMPLETE_SCAN)
+                    }
                 }
             }.exceptionOrNull()?.let { TRACE_START_ERROR }
             if (operation != traceOperation) return@launch
             traceActive = traceError == null
+            if (traceError != null && activeTraceOperation == operation) {
+                activeTraceOperation = null
+            }
             _state.update {
                 it.copy(recoverableError = traceError)
             }
@@ -348,6 +373,7 @@ class LocatorViewModel(
         reason: TraceOutcomeReason? = null,
         note: String? = null,
     ) {
+        val sessionOperation = activeTraceOperation
         val operation = ++traceOperation
         val pathLengthMetres = _state.value.metrics.pathLengthMetres
         stopTrackingJobs()
@@ -362,7 +388,15 @@ class LocatorViewModel(
         }
         viewModelScope.launch {
             val (result, history) = traceIo {
-                val completed = traceRecorder.finish(outcome, reason, note, pathLengthMetres)
+                val completed = if (activeTraceOperation == sessionOperation) {
+                    if (sessionOperation != null) {
+                        recordScannerStateLocked(SCANNER_STOPPED)
+                    }
+                    activeTraceOperation = null
+                    traceRecorder.finish(outcome, reason, note, pathLengthMetres)
+                } else {
+                    TraceFinalizationResult()
+                }
                 completed to historySnapshot(traceRecorder.completedTraces())
             }
             _traceSummaries.value = history.summaries
@@ -428,14 +462,32 @@ class LocatorViewModel(
         scanJob?.cancel()
         scanJob = viewModelScope.launch {
             scanner.track(candidate.handle)
-                .catch { fail("Device tracking stopped. Try the scan again") }
+                .catch {
+                    recordRecoverableFailure(FAILURE_SCANNER)
+                    recordScannerState(SCANNER_STOPPED)
+                    fail("Device tracking stopped. Try the scan again")
+                }
                 .collect { packet -> processTrackedPacket(packet) }
         }
         lostTargetJob?.cancel()
         lostTargetJob = viewModelScope.launch {
             while (isActive) {
                 delay(1_000L)
-                _state.update { current -> current.copy(guidance = guidance(current)) }
+                val current = _state.value
+                current.selected?.handle?.let { target ->
+                    val lastSeen = current.metrics.lastSeenElapsedNanos
+                        ?: current.selected.lastSeenElapsedNanos
+                    val timeout = if (target.transport == BluetoothTransport.CLASSIC) {
+                        CLASSIC_TARGET_LOST_NANOS
+                    } else {
+                        TARGET_LOST_NANOS
+                    }
+                    recordSignalState(
+                        target,
+                        clock.nowNanos() - lastSeen > timeout,
+                    )
+                }
+                _state.update { state -> state.copy(guidance = guidance(state)) }
             }
         }
     }
@@ -445,7 +497,10 @@ class LocatorViewModel(
         scanJob = viewModelScope.launch {
             scanner.completeScan()
                 .catch {
-                    stopRuntimeWork("Complete Scan stopped because Bluetooth scanning failed")
+                    stopRuntimeWork(
+                        "Complete Scan stopped because Bluetooth scanning failed",
+                        FAILURE_SCANNER,
+                    )
                 }
                 .collect(::processCompleteScanPacket)
         }
@@ -487,6 +542,7 @@ class LocatorViewModel(
     }
 
     private suspend fun processTrackedPacket(packet: ScanPacket) {
+        val operation = activeTraceOperation
         val (joined, estimate) = withContext(computationDispatcher) {
             val synchronized = synchronizer.synchronize(packet.observation)
             val latest = if (synchronized.accepted) {
@@ -496,10 +552,16 @@ class LocatorViewModel(
             }
             synchronized to latest
         }
-        if (traceActive) {
+        if (traceActive && operation != null) {
             try {
-                traceIo { traceRecorder.record(joined, estimate) }
+                traceIo {
+                    if (!traceMatches(operation)) return@traceIo
+                    traceRecorder.record(joined, estimate)
+                    recordEstimatorStateLocked(packet.target, estimate)
+                    recordSignalRecoveredLocked(packet.target)
+                }
             } catch (_: Exception) {
+                recordRecoverableFailure(FAILURE_TRACE_RECORDING)
                 traceActive = false
                 fail("Local session recording stopped")
             }
@@ -522,6 +584,7 @@ class LocatorViewModel(
     }
 
     private suspend fun processCompleteScanPacket(packet: ScanPacket) {
+        val operation = activeTraceOperation
         val identity = RadioIdentity(
             packet.target.transport,
             packet.target.ephemeralAddress,
@@ -547,12 +610,19 @@ class LocatorViewModel(
             }
             synchronized to latest
         }
-        if (traceActive) {
+        if (traceActive && operation != null) {
             try {
-                traceIo { traceRecorder.record(joined, estimate) }
+                traceIo {
+                    if (!traceMatches(operation)) return@traceIo
+                    traceRecorder.record(joined, estimate)
+                    recordEstimatorStateLocked(packet.target, estimate)
+                    recordSignalRecoveredLocked(packet.target)
+                }
             } catch (error: Exception) {
-                traceActive = false
-                stopRuntimeWork("Complete Scan stopped because trace recording failed")
+                stopRuntimeWork(
+                    "Complete Scan stopped because trace recording failed",
+                    FAILURE_TRACE_RECORDING,
+                )
                 return
             }
         }
@@ -595,12 +665,12 @@ class LocatorViewModel(
         }
     }
 
-    private fun publishCompleteScanDevices() {
+    private suspend fun publishCompleteScanDevices() {
         if (_state.value.screen != AppScreen.COMPLETE_SCAN) return
         val now = clock.nowNanos()
         val devices = completePipelines.values.map { pipeline ->
             val lastSeenAt = pipeline.metrics.lastSeenElapsedNanos
-            CompleteScanDevice(
+            val device = CompleteScanDevice(
                 key = pipeline.target.key,
                 displayName = pipeline.displayName
                     ?: "Device ${pipeline.target.key.value}",
@@ -610,6 +680,8 @@ class LocatorViewModel(
                 lastSeen = lastSeenAt != null &&
                     now - lastSeenAt > COMPLETE_SCAN_LAST_SEEN_NANOS,
             )
+            recordSignalState(pipeline.target, device.lastSeen)
+            device
         }
         _state.update { current ->
             current.copy(
@@ -659,7 +731,153 @@ class LocatorViewModel(
         }
     }
 
-    private fun stopRuntimeWork(message: String) {
+    private fun beginTrace(operation: Long, scannerState: String) {
+        activeTraceOperation = operation
+        tracedArState = null
+        tracedScannerState = null
+        tracedEstimatorStates.clear()
+        tracedLostSignals.clear()
+        val ar = _state.value.arStatus
+        recordArStateLocked(ar.status, ar.recoverable)
+        recordScannerStateLocked(scannerState)
+    }
+
+    private suspend fun recordArState(state: ArRuntimeStatus, recoverable: Boolean) {
+        val operation = activeTraceOperation ?: return
+        if (!traceActive) return
+        try {
+            traceIo {
+                if (traceMatches(operation)) recordArStateLocked(state, recoverable)
+            }
+        } catch (_: Exception) {
+            handleTraceRecordingFailure()
+        }
+    }
+
+    private fun recordArStateLocked(state: ArRuntimeStatus, recoverable: Boolean) {
+        if (tracedArState == state) return
+        recordEventLocked(TraceEventCode.AR_STATE, detail = state.name)
+        tracedArState = state
+        if (recoverable) {
+            recordEventLocked(TraceEventCode.RECOVERABLE_FAILURE, detail = FAILURE_AR)
+        }
+    }
+
+    private suspend fun recordScannerState(state: String) {
+        val operation = activeTraceOperation ?: return
+        if (!traceActive) return
+        runCatching {
+            traceIo {
+                if (traceMatches(operation)) recordScannerStateLocked(state)
+            }
+        }
+    }
+
+    private fun recordScannerStateLocked(state: String) {
+        if (tracedScannerState == state) return
+        recordEventLocked(TraceEventCode.SCANNER_STATE, detail = state)
+        tracedScannerState = state
+    }
+
+    private suspend fun recordSignalState(target: TargetHandle, lost: Boolean) {
+        val operation = activeTraceOperation ?: return
+        if (!traceActive) return
+        try {
+            traceIo {
+                if (!traceMatches(operation)) return@traceIo
+                val identity = target.key to target.transport
+                when {
+                    lost && identity !in tracedLostSignals -> {
+                        recordDeviceEventLocked(TraceEventCode.SIGNAL_LOST, target)
+                        tracedLostSignals += identity
+                    }
+                    !lost -> recordSignalRecoveredLocked(target)
+                }
+            }
+        } catch (_: Exception) {
+            handleTraceRecordingFailure()
+        }
+    }
+
+    private fun recordSignalRecoveredLocked(target: TargetHandle) {
+        val identity = target.key to target.transport
+        if (identity !in tracedLostSignals) return
+        recordDeviceEventLocked(TraceEventCode.SIGNAL_RECOVERED, target)
+        tracedLostSignals -= identity
+    }
+
+    private fun recordEstimatorStateLocked(
+        target: TargetHandle,
+        estimate: EstimateUiModel?,
+    ) {
+        val state = when (estimate?.status) {
+            ESTIMATE_STATUS_COLLECTING,
+            ESTIMATE_STATUS_GRID_MULTIMODAL,
+            ESTIMATE_STATUS_GRID_UNIMODAL,
+            ESTIMATE_STATUS_EKF,
+            -> estimate.status
+            else -> ESTIMATOR_STATE_INSUFFICIENT_EVIDENCE
+        }
+        val identity = target.key to target.transport
+        if (tracedEstimatorStates[identity] == state) return
+        recordDeviceEventLocked(TraceEventCode.ESTIMATOR_STATE_CHANGED, target, state)
+        tracedEstimatorStates[identity] = state
+    }
+
+    private suspend fun recordRecoverableFailure(failure: String) {
+        val operation = activeTraceOperation ?: return
+        if (!traceActive) return
+        runCatching {
+            traceIo {
+                if (traceMatches(operation)) {
+                    recordEventLocked(TraceEventCode.RECOVERABLE_FAILURE, detail = failure)
+                }
+            }
+        }
+    }
+
+    private fun recordDeviceEventLocked(
+        code: TraceEventCode,
+        target: TargetHandle,
+        detail: String? = null,
+    ) {
+        recordEventLocked(code, target.key, target.transport, detail)
+    }
+
+    private fun recordEventLocked(
+        code: TraceEventCode,
+        deviceKey: DeviceKey? = null,
+        transport: BluetoothTransport? = null,
+        detail: String? = null,
+    ) {
+        traceRecorder.recordEvent(
+            appMonotonicNanos = clock.nowNanos(),
+            code = code,
+            deviceKey = deviceKey,
+            transport = transport,
+            detail = detail,
+        )
+    }
+
+    private fun traceMatches(operation: Long): Boolean =
+        traceActive &&
+            operation == traceOperation &&
+            operation == activeTraceOperation
+
+    private fun handleTraceRecordingFailure() {
+        if (_state.value.screen == AppScreen.COMPLETE_SCAN) {
+            stopRuntimeWork(
+                "Complete Scan stopped because trace recording failed",
+                FAILURE_TRACE_RECORDING,
+            )
+        } else {
+            traceActive = false
+            fail("Local session recording stopped")
+        }
+    }
+
+    private fun stopRuntimeWork(message: String, failure: String = FAILURE_RUNTIME_REQUIREMENTS) {
+        val sessionOperation = activeTraceOperation
         val operation = ++traceOperation
         val pathLengthMetres = _state.value.metrics.pathLengthMetres
         discoveryJob?.cancel()
@@ -677,7 +895,14 @@ class LocatorViewModel(
         }
         viewModelScope.launch {
             val result = traceIo {
-                if (operation == traceOperation) {
+                if (operation == traceOperation && activeTraceOperation == sessionOperation) {
+                    if (sessionOperation != null) {
+                        runCatching {
+                            recordEventLocked(TraceEventCode.RECOVERABLE_FAILURE, detail = failure)
+                            recordScannerStateLocked(SCANNER_STOPPED)
+                        }
+                    }
+                    activeTraceOperation = null
                     val completed = traceRecorder.finish(
                         TraceOutcome.INCOMPLETE,
                         pathLengthMetres = pathLengthMetres,
@@ -730,6 +955,9 @@ class LocatorViewModel(
     }
 
     override fun onCleared() {
+        ++traceOperation
+        traceActive = false
+        activeTraceOperation = null
         discoveryJob?.cancel()
         stopTrackingJobs()
         poseJob?.cancel()
@@ -795,6 +1023,14 @@ class LocatorViewModel(
         const val CLASSIC_TARGET_LOST_NANOS = 20_000_000_000L
         const val CANDIDATE_WINDOW_NANOS = 5_000_000_000L
         const val COMPLETE_SCAN_LAST_SEEN_NANOS = 30_000_000_000L
+        const val SCANNER_SINGLE_TARGET = "SINGLE_TARGET_ACTIVE"
+        const val SCANNER_COMPLETE_SCAN = "COMPLETE_SCAN_ACTIVE"
+        const val SCANNER_STOPPED = "STOPPED"
+        const val ESTIMATOR_STATE_INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+        const val FAILURE_AR = "AR"
+        const val FAILURE_SCANNER = "SCANNER"
+        const val FAILURE_TRACE_RECORDING = "TRACE_RECORDING"
+        const val FAILURE_RUNTIME_REQUIREMENTS = "RUNTIME_REQUIREMENTS"
         const val HISTORY_READ_ERROR = "Session history could not be read"
         const val TRACE_START_ERROR = "Local session recording could not start"
         const val TRACE_FINISH_ERROR = "The session could not be saved"

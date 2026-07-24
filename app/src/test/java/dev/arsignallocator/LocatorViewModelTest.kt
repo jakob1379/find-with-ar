@@ -1,5 +1,6 @@
 package dev.arsignallocator
 
+import com.google.gson.JsonParser
 import dev.arsignallocator.ar.PoseSource
 import dev.arsignallocator.ble.BleAvailability
 import dev.arsignallocator.ble.BleScanner
@@ -117,7 +118,10 @@ class LocatorViewModelTest {
             val trace = viewModel.state.value.lastTraceFile
             assertNotNull(trace)
             assertFalse(trace!!.name.endsWith(".active.ndjson"))
-            assertEquals(3, trace.readLines().size)
+            assertEquals(
+                1,
+                "\"record_type\":\"observation\"".toRegex().findAll(trace.readText()).count(),
+            )
             assertTrue(trace.readText().contains("\"schema_version\":2"))
             assertTrue(trace.readText().contains("\"accepted\":true"))
             assertTrue(trace.readText().contains("\"outcome\":\"INCOMPLETE\""))
@@ -131,6 +135,169 @@ class LocatorViewModelTest {
                 "Some sessions could not be deleted",
                 viewModel.state.value.recoverableError,
             )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `single target records sanitized deduplicated transitions in write order`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val clock = FakeClock(1_000_000_000L)
+            val selected = target("event-single")
+            val scanner = FakeScanner(packet(selected, clock.nowNanos(), -65))
+            val engine = FakeLocationEngine()
+            val poseSource = FakePoseSource()
+            val viewModel = LocatorViewModel(
+                scanner = scanner,
+                locationEngine = engine,
+                synchronizer = SampleSynchronizer(),
+                traceRecorder = TraceRecorder(
+                    temporaryFolder.newFolder("event-single"),
+                    wallClockMillis = { 0L },
+                    monotonicClockNanos = { clock.nowNanos() },
+                    sessionIdFactory = { "event-single" },
+                ),
+                clock = clock,
+                appVersion = "test",
+                deviceModel = "fake",
+                computationDispatcher = dispatcher,
+                ioDispatcher = dispatcher,
+            )
+            viewModel.bindPoseSource(poseSource)
+            viewModel.setRuntimeReady(true)
+            runCurrent()
+            viewModel.selectDevice(selected.key)
+            runCurrent()
+            poseSource.emit(pose(clock.nowNanos()))
+            scanner.tracking.emit(packet(selected, clock.nowNanos(), -60))
+            runCurrent()
+
+            engine.current = localizedEstimate()
+            clock.value += 1L
+            scanner.tracking.emit(packet(selected, clock.nowNanos(), -59))
+            scanner.tracking.emit(packet(selected, clock.nowNanos() + 1L, -58))
+            runCurrent()
+
+            clock.value = 7_000_000_000L
+            advanceTimeBy(2_001L)
+            runCurrent()
+            scanner.tracking.emit(packet(selected, clock.nowNanos(), -57))
+            runCurrent()
+            poseSource.emitStatus(
+                ArStatus(
+                    ArRuntimeStatus.ERROR,
+                    "Test beacon AA:BB:CC:DD:EE:FF private exception",
+                    recoverable = true,
+                ),
+            )
+            poseSource.emitStatus(ArStatus(ArRuntimeStatus.ERROR, "different private detail", true))
+            runCurrent()
+
+            viewModel.completeTrace(TraceOutcome.YES)
+            runCurrent()
+
+            val lines = viewModel.state.value.lastTraceFile!!.readLines()
+            val events = lines.map(JsonParser::parseString)
+                .map { it.asJsonObject }
+                .filter { it["record_type"].asString == "event" }
+            assertEquals(
+                listOf(
+                    "ar_state" to "TRACKING",
+                    "scanner_state" to "SINGLE_TARGET_ACTIVE",
+                    "estimator_state_changed" to ESTIMATE_STATUS_COLLECTING,
+                    "estimator_state_changed" to ESTIMATE_STATUS_EKF,
+                    "signal_lost" to null,
+                    "signal_recovered" to null,
+                    "ar_state" to "ERROR",
+                    "recoverable_failure" to "AR",
+                    "scanner_state" to "STOPPED",
+                ),
+                events.map {
+                    it["code"].asString to
+                        it["detail"].takeUnless { detail -> detail.isJsonNull }?.asString
+                },
+            )
+            assertTrue(
+                lines.indexOfFirst { it.contains("\"sequence\":0") } <
+                    lines.indexOfFirst {
+                        it.contains("\"code\":\"estimator_state_changed\"") &&
+                            it.contains(ESTIMATE_STATUS_COLLECTING)
+                    },
+            )
+            assertTrue(
+                lines.indexOfLast { it.contains("\"record_type\":\"observation\"") } <
+                    lines.indexOfFirst { it.contains("\"code\":\"signal_recovered\"") },
+            )
+            val payload = lines.joinToString("\n")
+            assertFalse(payload.contains("Test beacon"))
+            assertFalse(payload.contains("AA:BB:CC:DD:EE:FF"))
+            assertFalse(payload.contains("private exception"))
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `AR event vocabulary covers every public state without raw detail`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val selected = target("ar-vocabulary")
+            val poseSource = FakePoseSource()
+            val viewModel = LocatorViewModel(
+                scanner = FakeScanner(packet(selected, 1_000_000_000L, -65)),
+                locationEngine = FakeLocationEngine(),
+                synchronizer = SampleSynchronizer(),
+                traceRecorder = TraceRecorder(
+                    temporaryFolder.newFolder("ar-vocabulary"),
+                    wallClockMillis = { 0L },
+                    monotonicClockNanos = { 0L },
+                    sessionIdFactory = { "ar-vocabulary" },
+                ),
+                clock = FakeClock(1_000_000_000L),
+                appVersion = "test",
+                deviceModel = "fake",
+                computationDispatcher = dispatcher,
+                ioDispatcher = dispatcher,
+            )
+            viewModel.bindPoseSource(poseSource)
+            viewModel.setRuntimeReady(true)
+            runCurrent()
+            viewModel.selectDevice(selected.key)
+            runCurrent()
+
+            ArRuntimeStatus.entries.forEach { status ->
+                repeat(2) {
+                    poseSource.emitStatus(
+                        ArStatus(status, "raw-$status-AA:BB:CC:DD:EE:FF"),
+                    )
+                    runCurrent()
+                }
+            }
+            viewModel.completeTrace(TraceOutcome.SKIPPED)
+            runCurrent()
+
+            val payload = viewModel.state.value.lastTraceFile!!.readText()
+            val arStates = payload.lineSequence()
+                .filter(String::isNotBlank)
+                .map(JsonParser::parseString)
+                .map { it.asJsonObject }
+                .filter {
+                    it["record_type"].asString == "event" &&
+                        it["code"].asString == "ar_state"
+                }
+                .map { it["detail"].asString }
+                .toList()
+            assertEquals(
+                listOf(ArRuntimeStatus.TRACKING.name) +
+                    ArRuntimeStatus.entries.map(Enum<*>::name),
+                arStates,
+            )
+            assertFalse(payload.contains("raw-"))
+            assertFalse(payload.contains("AA:BB:CC:DD:EE:FF"))
         } finally {
             Dispatchers.resetMain()
         }
@@ -231,6 +398,66 @@ class LocatorViewModelTest {
             Dispatchers.resetMain()
         }
     }
+
+    @Test
+    fun `finished session rejects later events and new session starts with current state`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            Dispatchers.setMain(dispatcher)
+            try {
+                val selected = target("session-events")
+                val scanner = FakeScanner(packet(selected, 1_000_000_000L, -65))
+                val poseSource = FakePoseSource()
+                var session = 0
+                val recorder = TraceRecorder(
+                    temporaryFolder.newFolder("session-events"),
+                    wallClockMillis = { 0L },
+                    monotonicClockNanos = { 0L },
+                    sessionIdFactory = { "session-events-${++session}" },
+                )
+                val viewModel = LocatorViewModel(
+                    scanner = scanner,
+                    locationEngine = FakeLocationEngine(),
+                    synchronizer = SampleSynchronizer(),
+                    traceRecorder = recorder,
+                    clock = FakeClock(1_000_000_000L),
+                    appVersion = "test",
+                    deviceModel = "fake",
+                    computationDispatcher = dispatcher,
+                    ioDispatcher = dispatcher,
+                )
+                viewModel.bindPoseSource(poseSource)
+                viewModel.setRuntimeReady(true)
+                runCurrent()
+                viewModel.selectDevice(selected.key)
+                runCurrent()
+
+                viewModel.completeTrace(TraceOutcome.YES)
+                poseSource.emitStatus(ArStatus(ArRuntimeStatus.READY, "private after finish"))
+                runCurrent()
+                viewModel.selectDevice(selected.key)
+                runCurrent()
+                viewModel.completeTrace(TraceOutcome.SKIPPED)
+                runCurrent()
+
+                val traces = recorder.completedTraces().associateBy { file ->
+                    JsonParser.parseString(file.readLines().first())
+                        .asJsonObject["session_id"].asString
+                }
+                val first = traces.getValue("session-events-1").readText()
+                val second = traces.getValue("session-events-2").readText()
+                assertFalse(first.contains("\"detail\":\"READY\""))
+                assertEquals(
+                    "outcome",
+                    JsonParser.parseString(first.lineSequence().last(String::isNotBlank))
+                        .asJsonObject["record_type"].asString,
+                )
+                assertTrue(second.contains("\"code\":\"ar_state\",\"detail\":\"READY\""))
+                assertFalse(second.contains("private after finish"))
+            } finally {
+                Dispatchers.resetMain()
+            }
+        }
 
     @Test
     fun `stale trace start recovers itself before a newer finish can run`() = runTest {
@@ -491,6 +718,8 @@ class LocatorViewModelTest {
                 assertEquals(4, engines[1].updates)
                 assertEquals(4, viewModel.state.value.completeScanDevices[1].metrics.receivedCount)
                 assertEquals(ble.key, viewModel.state.value.focusedDeviceKey)
+                scanner.tracking.emit(packet(ble, clock.nowNanos() + 1L, -59))
+                runCurrent()
 
                 viewModel.completeTrace(TraceOutcome.YES)
                 runCurrent()
@@ -501,6 +730,23 @@ class LocatorViewModelTest {
                 assertTrue(payload.contains("\"localized_device_count\":1"))
                 assertTrue(payload.contains("\"device_key\":\"D01\""))
                 assertTrue(payload.contains("\"device_key\":\"D02\""))
+                assertTrue(
+                    payload.contains(
+                        "\"code\":\"scanner_state\",\"detail\":\"COMPLETE_SCAN_ACTIVE\"",
+                    ),
+                )
+                assertEquals(
+                    2,
+                    "\"code\":\"estimator_state_changed\"".toRegex().findAll(payload).count(),
+                )
+                assertEquals(1, "\"code\":\"signal_lost\"".toRegex().findAll(payload).count())
+                assertEquals(1, "\"code\":\"signal_recovered\"".toRegex().findAll(payload).count())
+                assertTrue(
+                    payload.contains(
+                        "\"device_key\":\"D01\",\"transport\":\"low_energy\"," +
+                            "\"code\":\"signal_recovered\"",
+                    ),
+                )
                 assertFalse(payload.contains("AA:BB:CC:DD:EE:FF"))
                 assertFalse(payload.contains("Beacon"))
                 assertEquals(AppScreen.DEVICES, viewModel.state.value.screen)
@@ -810,10 +1056,11 @@ class LocatorViewModelTest {
         override val poses = mutablePoses
         override val status = MutableStateFlow(ArStatus(ArRuntimeStatus.TRACKING))
         suspend fun emit(pose: PoseObservation) = mutablePoses.emit(pose)
+        suspend fun emitStatus(value: ArStatus) = status.emit(value)
     }
 
     private class FakeLocationEngine(
-        private val current: EstimateUiModel = collectingEstimate(),
+        var current: EstimateUiModel = collectingEstimate(),
     ) : LocationEngine {
         var updates = 0
 
