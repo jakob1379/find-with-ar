@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ar_signal_analysis.io import load_trace, write_trace
-from ar_signal_analysis.replay import estimator_inputs, format_estimator_inputs
+from ar_signal_analysis.replay import estimator_inputs_by_device, format_estimator_inputs
 from ar_signal_analysis.report import build_calibration_report, format_text_report
 from ar_signal_analysis.schema import TraceValidationError
 from ar_signal_analysis.simulate import SimulationConfig, simulate_trace, utc_now_iso
@@ -81,10 +81,29 @@ def replay_main(argv: Sequence[str] | None = None) -> int:
         description="Reconstruct the ordered estimator-input stream from an Android trace.",
     )
     parser.add_argument("trace", type=Path, help="versioned NDJSON trace")
+    parser.add_argument(
+        "--device-key",
+        help="session-local device key; required when a trace contains multiple devices",
+    )
     parser.add_argument("--output", type=Path, help="write canonical NDJSON instead of stdout")
     args = parser.parse_args(argv)
     try:
-        payload = format_estimator_inputs(estimator_inputs(load_trace(args.trace)))
+        streams = estimator_inputs_by_device(load_trace(args.trace))
+        if args.device_key is None and len(streams) > 1:
+            parser.error(
+                "trace contains multiple devices; pass --device-key "
+                f"({', '.join(streams)})"
+            )
+        if not streams and args.device_key is None:
+            payload = ""
+        else:
+            device_key = args.device_key or next(iter(streams))
+            if device_key not in streams:
+                parser.error(
+                    f"device key {device_key!r} is not present "
+                    f"({', '.join(streams) or 'no devices'})"
+                )
+            payload = format_estimator_inputs(streams[device_key])
         if args.output is None:
             sys.stdout.write(payload)
         else:

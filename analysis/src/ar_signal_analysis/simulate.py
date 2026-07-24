@@ -13,6 +13,7 @@ from ar_signal_analysis.schema import (
     CURRENT_SCHEMA_VERSION,
     GroundTruth,
     ObservationRecord,
+    OutcomeRecord,
     Pose,
     SessionRecord,
     Trace,
@@ -40,7 +41,7 @@ class SimulationConfig:
     noise_scale_db: float = 2.5
     outlier_probability: float = 0.04
     outlier_scale_db: float = 12.0
-    created_at_utc: str = "2026-01-01T00:00:00Z"
+    created_at_utc: str = "2026-01-01T00:00:00.000Z"
 
     def validate(self) -> None:
         if self.sample_count < 1:
@@ -71,9 +72,7 @@ def simulate_trace(
     config = config or SimulationConfig()
     config.validate()
     path = (
-        default_walk_path(config)
-        if path_xz_m is None
-        else np.asarray(path_xz_m, dtype=np.float64)
+        default_walk_path(config) if path_xz_m is None else np.asarray(path_xz_m, dtype=np.float64)
     )
     if path.shape != (config.sample_count, 2):
         raise ValueError(f"path_xz_m must have shape ({config.sample_count}, 2)")
@@ -81,9 +80,7 @@ def simulate_trace(
         raise ValueError("path_xz_m must contain finite positions")
 
     rng = np.random.default_rng(config.seed)
-    target = np.asarray(
-        [config.target_x_m, config.target_y_m, config.target_z_m], dtype=np.float64
-    )
+    target = np.asarray([config.target_x_m, config.target_y_m, config.target_z_m], dtype=np.float64)
     phone_positions = np.column_stack(
         (
             path[:, 0],
@@ -92,9 +89,7 @@ def simulate_trace(
         )
     )
     distances = np.maximum(np.linalg.norm(phone_positions - target, axis=1), config.min_distance_m)
-    expected_rssi = config.rssi_at_1m_dbm - 10.0 * config.path_loss_exponent * np.log10(
-        distances
-    )
+    expected_rssi = config.rssi_at_1m_dbm - 10.0 * config.path_loss_exponent * np.log10(distances)
     noise = rng.standard_t(config.student_t_df, size=config.sample_count) * config.noise_scale_db
     outlier_mask = rng.random(config.sample_count) < config.outlier_probability
     outlier_noise = rng.normal(0.0, config.outlier_scale_db, size=config.sample_count)
@@ -125,6 +120,11 @@ def simulate_trace(
                 tracking_state="TRACKING",
             ),
             advertisement={"synthetic_outlier": bool(outlier_mask[index])},
+            pose_association_age_ns=0,
+            filtered_rssi_dbm=float(value),
+            rssi_variance_db2=max(config.noise_scale_db**2, np.finfo(np.float64).eps),
+            device_key="D01",
+            transport="low_energy",
         )
         for index, value in enumerate(rssi)
     )
@@ -135,12 +135,13 @@ def simulate_trace(
         app_version="analysis-simulator/0.1.0",
         device_model="synthetic",
         coordinate_frame="arcore_xz_m",
+        mode="SINGLE_TARGET",
         environment="synthetic",
         ground_truth=GroundTruth(x_m=config.target_x_m, z_m=config.target_z_m),
         metadata={
             "target": {
-                "session_key": "synthetic-target",
-                "display_name": "Synthetic beacon",
+                "session_key": "D01",
+                "transport": "low_energy",
                 "manufacturer_ids": [],
                 "service_uuids": [],
             },
@@ -153,10 +154,28 @@ def simulate_trace(
                 "noise_scale_db": config.noise_scale_db,
                 "outlier_probability": config.outlier_probability,
                 "outlier_scale_db": config.outlier_scale_db,
-            }
+            },
         },
     )
-    return Trace(session=session, observations=observations)
+    outcome = OutcomeRecord(
+        schema_version=CURRENT_SCHEMA_VERSION,
+        session_id=config.session_id,
+        ended_at_utc=config.created_at_utc,
+        duration_ms=round((config.sample_count - 1) * config.interval_s * 1_000),
+        outcome="INCOMPLETE",
+        observed_device_count=1,
+        localized_device_count=0,
+        path_length_m=float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum()),
+        device_states=(
+            {
+                "device_key": "D01",
+                "transport": "low_energy",
+                "status": "insufficient_evidence",
+                "estimator": None,
+            },
+        ),
+    )
+    return Trace(session=session, observations=observations, outcome=outcome)
 
 
 def default_walk_path(config: SimulationConfig) -> npt.NDArray[np.float64]:
@@ -183,12 +202,10 @@ def expected_log_distance_rssi_dbm(
         raise ValueError("min_distance_m must be positive")
     if path_loss_exponent <= 0:
         raise ValueError("path_loss_exponent must be positive")
-    return rssi_at_1m_dbm - 10.0 * path_loss_exponent * log10(
-        max(distance_m, min_distance_m)
-    )
+    return rssi_at_1m_dbm - 10.0 * path_loss_exponent * log10(max(distance_m, min_distance_m))
 
 
 def utc_now_iso() -> str:
     """Return an ISO timestamp for interactive CLI-generated traces."""
 
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")

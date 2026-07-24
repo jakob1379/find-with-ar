@@ -22,10 +22,12 @@ import dev.arsignallocator.model.TrackingMetrics
 import dev.arsignallocator.ar.PoseSource
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
-import java.io.File
+import dev.arsignallocator.trace.TraceOutcome
+import dev.arsignallocator.trace.TraceOutcomeReason
 import java.util.Locale
 import kotlin.math.hypot
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -36,6 +38,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class LocatorViewModel(
@@ -59,9 +63,29 @@ class LocatorViewModel(
     private var poseJob: Job? = null
     private var arStatusJob: Job? = null
     private var traceActive = false
+    @Volatile
+    private var traceOperation = 0L
+    private val traceMutex = Mutex()
     private val candidateAccumulators = linkedMapOf<DeviceKey, CandidateAccumulator>()
     private var candidateOrder = emptyList<DeviceKey>()
     private var lastBreadcrumb: PoseObservation? = null
+
+    init {
+        viewModelScope.launch {
+            val operation = traceOperation
+            val initialized = runCatching { traceIo { traceRecorder.initialize() } }
+            if (operation == traceOperation) {
+                _state.update {
+                    it.copy(
+                        lastTraceFile = initialized.getOrDefault(emptyList()).firstOrNull(),
+                        recoverableError = initialized.exceptionOrNull()?.let { error ->
+                            "Could not read local trace storage: ${error.message}"
+                        } ?: traceRecorder.storageError,
+                    )
+                }
+            }
+        }
+    }
 
     fun bindPoseSource(source: PoseSource) {
         poseJob?.cancel()
@@ -149,29 +173,37 @@ class LocatorViewModel(
 
     fun selectDevice(key: DeviceKey) {
         val candidate = _state.value.candidates.firstOrNull { it.key == key } ?: return
+        val operation = ++traceOperation
         discoveryJob?.cancel()
         discoveryJob = null
         synchronizer.reset()
         locationEngine.reset()
         lastBreadcrumb = null
-        var traceError: String? = null
-        val traceFile = try {
-            traceRecorder.start(appVersion, deviceModel, candidate.handle).also { traceActive = true }
-        } catch (error: Exception) {
-            traceActive = false
-            traceError = "Could not start trace recording: ${error.message}"
-            null
-        }
+        val previousTrace = _state.value.lastTraceFile
         _state.value = LocatorUiState(
             screen = AppScreen.TRACKING,
             selected = candidate,
             isDiscovering = false,
             arStatus = _state.value.arStatus,
             guidance = "Signal found. Walk sideways while keeping the camera uncovered",
-            recoverableError = traceError,
-            lastTraceFile = traceFile,
+            recoverableError = traceRecorder.storageError,
+            lastTraceFile = previousTrace,
         )
-        startSelectedScan(candidate)
+        viewModelScope.launch {
+            val traceError = runCatching {
+                traceIo {
+                    if (operation != traceOperation) return@traceIo
+                    traceRecorder.start(appVersion, deviceModel, candidate.handle)
+                    if (operation != traceOperation) traceRecorder.stop()
+                }
+            }.exceptionOrNull()?.let { "Could not start trace recording: ${it.message}" }
+            if (operation != traceOperation) return@launch
+            traceActive = traceError == null
+            _state.update {
+                it.copy(recoverableError = traceError ?: traceRecorder.storageError)
+            }
+            startSelectedScan(candidate)
+        }
     }
 
     fun showTracking() {
@@ -182,35 +214,60 @@ class LocatorViewModel(
         if (_state.value.selected != null) _state.update { it.copy(screen = AppScreen.DEBUG) }
     }
 
-    fun stopAndReturnToDevices() {
+    fun stopAndReturnToDevices() = completeTrace(TraceOutcome.INCOMPLETE)
+
+    fun completeTrace(
+        outcome: TraceOutcome,
+        reason: TraceOutcomeReason? = null,
+        note: String? = null,
+    ) {
+        val operation = ++traceOperation
+        val pathLengthMetres = _state.value.metrics.pathLengthMetres
         stopTrackingJobs()
-        val traceFile = traceRecorder.stop()
         traceActive = false
         _state.update {
             LocatorUiState(
                 screen = AppScreen.DEVICES,
                 arStatus = it.arStatus,
-                lastTraceFile = traceFile ?: it.lastTraceFile,
+                lastTraceFile = it.lastTraceFile,
                 guidance = "Select a device to begin",
             )
+        }
+        viewModelScope.launch {
+            val result = traceIo {
+                traceRecorder.finish(outcome, reason, note, pathLengthMetres)
+            }
+            if (operation != traceOperation) return@launch
+            _state.update {
+                it.copy(
+                    lastTraceFile = result.file ?: it.lastTraceFile,
+                    recoverableError = result.error ?: traceRecorder.storageError,
+                )
+            }
         }
         if (runtimeReady) startDiscovery()
     }
 
-    fun deleteLocalTraces(traceDirectory: File) {
+    fun deleteLocalTraces() {
+        val operation = ++traceOperation
         stopTrackingJobs()
-        traceRecorder.stop()
         traceActive = false
-        val failedDeletes = traceDirectory.listFiles { file -> file.extension == "ndjson" }
-            .orEmpty()
-            .count { !it.delete() }
-        _state.update {
-            it.copy(
-                lastTraceFile = null,
-                recoverableError = if (failedDeletes == 0) null else {
-                    "Could not delete $failedDeletes local trace file(s)"
-                },
-            )
+        viewModelScope.launch {
+            val deleted = traceIo {
+                if (operation != traceOperation) return@traceIo false
+                traceRecorder.stop()
+                traceRecorder.deleteAllTraces()
+                true
+            }
+            if (!deleted) return@launch
+            if (operation != traceOperation) return@launch
+            val remaining = traceIo { traceRecorder.completedTraces() }
+            _state.update {
+                it.copy(
+                    lastTraceFile = remaining.firstOrNull(),
+                    recoverableError = traceRecorder.storageError,
+                )
+            }
         }
     }
 
@@ -270,7 +327,7 @@ class LocatorViewModel(
         }
         if (traceActive) {
             try {
-                withContext(ioDispatcher) { traceRecorder.record(joined, estimate) }
+                traceIo { traceRecorder.record(joined, estimate) }
             } catch (error: Exception) {
                 traceActive = false
                 fail("Trace recording stopped: ${error.message}")
@@ -353,19 +410,31 @@ class LocatorViewModel(
     }
 
     private fun stopRuntimeWork(message: String) {
+        val operation = ++traceOperation
         discoveryJob?.cancel()
         discoveryJob = null
         stopTrackingJobs()
-        val completedTrace = traceRecorder.stop()
         traceActive = false
         _state.update { current ->
             LocatorUiState(
                 screen = AppScreen.DEVICES,
                 arStatus = current.arStatus,
-                lastTraceFile = completedTrace ?: current.lastTraceFile,
+                lastTraceFile = current.lastTraceFile,
                 recoverableError = message,
                 guidance = message,
             )
+        }
+        viewModelScope.launch {
+            val result = traceIo {
+                if (operation == traceOperation) traceRecorder.stop() else null
+            } ?: return@launch
+            if (operation != traceOperation) return@launch
+            _state.update {
+                it.copy(
+                    lastTraceFile = result.file ?: it.lastTraceFile,
+                    recoverableError = result.error?.let { error -> "$message; $error" } ?: message,
+                )
+            }
         }
     }
 
@@ -380,12 +449,17 @@ class LocatorViewModel(
         _state.update { it.copy(recoverableError = message, guidance = message) }
     }
 
+    private suspend fun <T> traceIo(block: () -> T): T =
+        traceMutex.withLock { withContext(ioDispatcher) { block() } }
+
     override fun onCleared() {
         discoveryJob?.cancel()
         stopTrackingJobs()
         poseJob?.cancel()
         arStatusJob?.cancel()
-        traceRecorder.close()
+        CoroutineScope(ioDispatcher).launch {
+            traceMutex.withLock { traceRecorder.close() }
+        }
     }
 
     private class CandidateAccumulator(initial: ScanPacket) {

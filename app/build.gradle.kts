@@ -49,6 +49,7 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.coroutines.android)
     implementation(libs.arcore)
+    implementation("com.google.code.gson:gson:2.11.0")
 
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
@@ -60,4 +61,8 @@ dependencies {
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+}
+
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    systemProperty("sharedFixturesDir", rootProject.file("test-data/fixtures").absolutePath)
 }

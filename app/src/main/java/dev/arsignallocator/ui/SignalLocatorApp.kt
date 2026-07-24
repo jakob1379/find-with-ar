@@ -87,7 +87,6 @@ import kotlin.math.sqrt
 fun SignalLocatorApp(
     viewModel: LocatorViewModel,
     arPoseSource: ArCorePoseSource,
-    traceDirectory: File,
     onExport: (File) -> Unit,
     onLeaveTracking: () -> Unit,
     onFoundTarget: () -> Unit,
@@ -204,7 +203,7 @@ fun SignalLocatorApp(
                     onCompleteScan = onCompleteScan,
                     onSettings = { devicePage = DevicePage.SETTINGS },
                     onExport = onExport,
-                    onDelete = { viewModel.deleteLocalTraces(traceDirectory) },
+                    onDelete = viewModel::deleteLocalTraces,
                 )
                 DevicePage.SETTINGS -> SettingsScreen(
                     onBack = { devicePage = DevicePage.PICKER },

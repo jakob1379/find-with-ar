@@ -6,6 +6,7 @@ import dev.arsignallocator.ble.BleScanner
 import dev.arsignallocator.ble.ScanPacket
 import dev.arsignallocator.core.MonotonicClock
 import dev.arsignallocator.localization.LocationEngine
+import dev.arsignallocator.model.AppScreen
 import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.ArStatus
 import dev.arsignallocator.model.BleObservation
@@ -18,18 +19,22 @@ import dev.arsignallocator.model.SynchronizedObservation
 import dev.arsignallocator.model.TargetHandle
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
+import dev.arsignallocator.trace.TraceOutcome
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -64,6 +69,7 @@ class LocatorViewModelTest {
                     temporaryFolder.root,
                     wallClockMillis = { 0L },
                     sessionIdFactory = { "coordinator-test" },
+                    deleteFile = { false },
                 ),
                 clock = clock,
                 appVersion = "test",
@@ -87,15 +93,230 @@ class LocatorViewModelTest {
             assertEquals(1, viewModel.state.value.metrics.receivedCount)
             assertEquals(1, viewModel.state.value.metrics.acceptedCount)
             assertEquals(1, engine.updates)
-            val trace = viewModel.state.value.lastTraceFile
-            assertNotNull(trace)
-            assertEquals(2, trace!!.readLines().size)
-            assertTrue(trace.readText().contains("\"schema_version\":1"))
-            assertTrue(trace.readText().contains("\"accepted\":true"))
+            assertNull(viewModel.state.value.lastTraceFile)
+            assertTrue(
+                temporaryFolder.root.listFiles()
+                    .orEmpty()
+                    .single()
+                    .name
+                    .endsWith(".active.ndjson"),
+            )
 
             viewModel.setRuntimeReady(false)
             runCurrent()
+            val trace = viewModel.state.value.lastTraceFile
+            assertNotNull(trace)
+            assertFalse(trace!!.name.endsWith(".active.ndjson"))
+            assertEquals(3, trace.readLines().size)
+            assertTrue(trace.readText().contains("\"schema_version\":2"))
+            assertTrue(trace.readText().contains("\"accepted\":true"))
+            assertTrue(trace.readText().contains("\"outcome\":\"INCOMPLETE\""))
             assertTrue(viewModel.state.value.recoverableError!!.contains("unavailable"))
+
+            viewModel.deleteLocalTraces()
+            runCurrent()
+            assertEquals(trace, viewModel.state.value.lastTraceFile)
+            assertTrue(trace.exists())
+            assertTrue(viewModel.state.value.recoverableError!!.contains("Could not delete 1"))
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `explicit completion records only the supplied outcome`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val clock = FakeClock(1_000_000_000L)
+            val target = target("explicit-outcome")
+            val scanner = FakeScanner(packet(target, at = clock.nowNanos(), rssi = -65))
+            val viewModel = LocatorViewModel(
+                scanner = scanner,
+                locationEngine = FakeLocationEngine(),
+                synchronizer = SampleSynchronizer(),
+                traceRecorder = TraceRecorder(
+                    temporaryFolder.root,
+                    wallClockMillis = { 0L },
+                    monotonicClockNanos = { 0L },
+                    sessionIdFactory = { "explicit-outcome" },
+                ),
+                clock = clock,
+                appVersion = "test",
+                deviceModel = "fake",
+                computationDispatcher = dispatcher,
+                ioDispatcher = dispatcher,
+            )
+            viewModel.setRuntimeReady(true)
+            runCurrent()
+            viewModel.selectDevice(target.key)
+            runCurrent()
+
+            viewModel.completeTrace(TraceOutcome.YES, note = "explicit test answer")
+            runCurrent()
+
+            val payload = viewModel.state.value.lastTraceFile!!.readText()
+            assertTrue(payload.contains("\"outcome\":\"YES\""))
+            assertTrue(payload.contains("\"note\":\"explicit test answer\""))
+            assertFalse(payload.contains("\"outcome\":\"NO\""))
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `explicit completion survives a newer session starting`() = runTest {
+        val mainDispatcher = StandardTestDispatcher(testScheduler)
+        val ioScheduler = TestCoroutineScheduler()
+        val ioDispatcher = StandardTestDispatcher(ioScheduler)
+        Dispatchers.setMain(mainDispatcher)
+        try {
+            val target = target("completion-race")
+            val scanner = FakeScanner(packet(target, at = 1_000_000_000L, rssi = -65))
+            var sessionNumber = 0
+            val recorder = TraceRecorder(
+                temporaryFolder.root,
+                wallClockMillis = { 0L },
+                monotonicClockNanos = { 0L },
+                sessionIdFactory = { "completion-race-${++sessionNumber}" },
+            )
+            val viewModel = LocatorViewModel(
+                scanner = scanner,
+                locationEngine = FakeLocationEngine(),
+                synchronizer = SampleSynchronizer(),
+                traceRecorder = recorder,
+                clock = FakeClock(1_000_000_000L),
+                appVersion = "test",
+                deviceModel = "fake",
+                computationDispatcher = mainDispatcher,
+                ioDispatcher = ioDispatcher,
+            )
+
+            runCurrent()
+            ioScheduler.runCurrent()
+            runCurrent()
+            viewModel.setRuntimeReady(true)
+            runCurrent()
+            viewModel.selectDevice(target.key)
+            runCurrent()
+            ioScheduler.runCurrent()
+            runCurrent()
+
+            viewModel.completeTrace(TraceOutcome.YES)
+            runCurrent()
+            assertEquals(1, viewModel.state.value.candidates.size)
+            viewModel.selectDevice(target.key)
+            runCurrent()
+            ioScheduler.runCurrent()
+            runCurrent()
+
+            val firstTrace = recorder.completedTraces()
+                .single { it.readText().contains("\"session_id\":\"completion-race-1\"") }
+            assertTrue(firstTrace.readText().contains("\"outcome\":\"YES\""))
+            assertFalse(firstTrace.readText().contains("\"outcome\":\"INCOMPLETE\""))
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `stale trace start recovers itself before a newer finish can run`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val clock = FakeClock(1_000_000_000L)
+            val target = target("stale-start")
+            val scanner = FakeScanner(packet(target, at = clock.nowNanos(), rssi = -65))
+            lateinit var viewModel: LocatorViewModel
+            var interruptStart = true
+            val recorder = TraceRecorder(
+                traceDirectory = temporaryFolder.root,
+                wallClockMillis = { 0L },
+                monotonicClockNanos = { 0L },
+                sessionIdFactory = { "stale-start" },
+                writerFactory = { file ->
+                    if (interruptStart) {
+                        interruptStart = false
+                        viewModel.stopAndReturnToDevices()
+                    }
+                    file.bufferedWriter()
+                },
+            )
+            viewModel = LocatorViewModel(
+                scanner = scanner,
+                locationEngine = FakeLocationEngine(),
+                synchronizer = SampleSynchronizer(),
+                traceRecorder = recorder,
+                clock = clock,
+                appVersion = "test",
+                deviceModel = "fake",
+                computationDispatcher = dispatcher,
+                ioDispatcher = dispatcher,
+            )
+            viewModel.setRuntimeReady(true)
+            runCurrent()
+
+            viewModel.selectDevice(target.key)
+            runCurrent()
+
+            assertEquals(AppScreen.DEVICES, viewModel.state.value.screen)
+            assertEquals(0, scanner.trackCalls)
+            assertFalse(
+                temporaryFolder.root.listFiles().orEmpty()
+                    .any { it.name.endsWith(".active.ndjson") },
+            )
+            val payload = recorder.completedTraces().single().readText()
+            assertTrue(payload.contains("\"session_id\":\"stale-start\""))
+            assertTrue(payload.contains("\"outcome\":\"INCOMPLETE\""))
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `finalization failure is recoverable UI state`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val clock = FakeClock(1_000_000_000L)
+            val target = TargetHandle(
+                DeviceKey("D01"),
+                "AA:BB:CC:DD:EE:FF",
+                "Test beacon",
+                emptySet(),
+                emptySet(),
+            )
+            val viewModel = LocatorViewModel(
+                scanner = FakeScanner(packet(target, at = clock.nowNanos(), rssi = -65)),
+                locationEngine = FakeLocationEngine(),
+                synchronizer = SampleSynchronizer(),
+                traceRecorder = TraceRecorder(
+                    traceDirectory = temporaryFolder.root,
+                    wallClockMillis = { 0L },
+                    monotonicClockNanos = { 0L },
+                    sessionIdFactory = { "rename-failure" },
+                    renameFile = { _, _ -> false },
+                ),
+                clock = clock,
+                appVersion = "test",
+                deviceModel = "fake",
+                computationDispatcher = dispatcher,
+                ioDispatcher = dispatcher,
+            )
+            viewModel.setRuntimeReady(true)
+            runCurrent()
+            viewModel.selectDevice(target.key)
+            runCurrent()
+
+            viewModel.stopAndReturnToDevices()
+            runCurrent()
+
+            assertEquals(AppScreen.DEVICES, viewModel.state.value.screen)
+            assertTrue(viewModel.state.value.recoverableError!!.contains("Could not finalize"))
+            assertTrue(
+                temporaryFolder.root.listFiles().orEmpty()
+                    .any { it.name.endsWith(".active.ndjson") },
+            )
         } finally {
             Dispatchers.resetMain()
         }
@@ -107,10 +328,14 @@ class LocatorViewModelTest {
 
     private class FakeScanner(private val discoveryPacket: ScanPacket) : BleScanner {
         val tracking = MutableSharedFlow<ScanPacket>(extraBufferCapacity = 4)
+        var trackCalls = 0
         override fun availability(): BleAvailability = BleAvailability.Available
         override fun discover(durationMillis: Long): Flow<ScanPacket> =
             kotlinx.coroutines.flow.flowOf(discoveryPacket)
-        override fun track(target: TargetHandle): Flow<ScanPacket> = tracking
+        override fun track(target: TargetHandle): Flow<ScanPacket> {
+            trackCalls += 1
+            return tracking
+        }
     }
 
     private class FakePoseSource : PoseSource {
@@ -155,6 +380,14 @@ class LocatorViewModelTest {
             manufacturerIds = target.manufacturerIds,
             serviceUuids = target.serviceUuids,
         ),
+    )
+
+    private fun target(key: String) = TargetHandle(
+        DeviceKey(key),
+        "AA:BB:CC:DD:EE:FF",
+        "Test beacon",
+        emptySet(),
+        emptySet(),
     )
 
     private fun pose(at: Long) = PoseObservation(

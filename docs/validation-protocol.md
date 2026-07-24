@@ -45,6 +45,7 @@ cmp estimator-inputs-a.ndjson estimator-inputs-b.ndjson
 uv run --project analysis ar-signal-analyse capture.ndjson --format json --output report.json
 ```
 
+For a multi-device `COMPLETE_SCAN`, add the same `--device-key D01` to both replay commands.
 Replay the same capture twice. Ordered estimator inputs and the generated report must be byte-for-byte identical. Archive the capture checksum with the test notes.
 
 ## 4. Labelled localization trials

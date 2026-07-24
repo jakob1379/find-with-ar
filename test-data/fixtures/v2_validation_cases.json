@@ -1,0 +1,95 @@
+[
+  {
+    "name": "canonical UTC and uppercase pose",
+    "created_at_utc": "1970-01-01T00:00:00.000Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "x",
+    "detail_count": 200,
+    "valid": true
+  },
+  {
+    "name": "UTC offset is not canonical",
+    "created_at_utc": "1970-01-01T00:00:00.000+00:00",
+    "tracking_state": "TRACKING",
+    "detail_character": "x",
+    "detail_count": 1,
+    "valid": false
+  },
+  {
+    "name": "UTC requires millisecond precision",
+    "created_at_utc": "1970-01-01T00:00:00Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "x",
+    "detail_count": 1,
+    "valid": false
+  },
+  {
+    "name": "UTC calendar date must exist",
+    "created_at_utc": "1970-02-30T00:00:00.000Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "x",
+    "detail_count": 1,
+    "valid": false
+  },
+  {
+    "name": "pose state is case sensitive",
+    "created_at_utc": "1970-01-01T00:00:00.000Z",
+    "tracking_state": "tracking",
+    "detail_character": "x",
+    "detail_count": 1,
+    "valid": false
+  },
+  {
+    "name": "supplementary Unicode counts as one character",
+    "created_at_utc": "1970-01-01T00:00:00.000Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "😀",
+    "detail_count": 200,
+    "valid": true
+  },
+  {
+    "name": "Unicode detail over code point limit",
+    "created_at_utc": "1970-01-01T00:00:00.000Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "😀",
+    "detail_count": 201,
+    "valid": false
+  },
+  {
+    "name": "signed 64-bit maximum and ASCII device key",
+    "created_at_utc": "1970-01-01T00:00:00.000Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "x",
+    "detail_count": 1,
+    "device_key": "D99",
+    "platform_timestamp_ns": 9223372036854775807,
+    "valid": true
+  },
+  {
+    "name": "integer above signed 64-bit range",
+    "created_at_utc": "1970-01-01T00:00:00.000Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "x",
+    "detail_count": 1,
+    "platform_timestamp_ns": 9223372036854775808,
+    "valid": false
+  },
+  {
+    "name": "integer below signed 64-bit range",
+    "created_at_utc": "1970-01-01T00:00:00.000Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "x",
+    "detail_count": 1,
+    "platform_timestamp_ns": -9223372036854775809,
+    "valid": false
+  },
+  {
+    "name": "Unicode digits are not device-key digits",
+    "created_at_utc": "1970-01-01T00:00:00.000Z",
+    "tracking_state": "TRACKING",
+    "detail_character": "x",
+    "detail_count": 1,
+    "device_key": "D٠١",
+    "valid": false
+  }
+]

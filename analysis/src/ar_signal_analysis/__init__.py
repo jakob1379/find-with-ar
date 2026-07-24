@@ -8,12 +8,18 @@ from ar_signal_analysis.metrics import (
     path_metrics,
     strongest_rssi_baseline,
 )
-from ar_signal_analysis.replay import estimator_inputs, format_estimator_inputs
+from ar_signal_analysis.replay import (
+    estimator_inputs,
+    estimator_inputs_by_device,
+    format_estimator_inputs,
+)
 from ar_signal_analysis.report import build_calibration_report, format_text_report
 from ar_signal_analysis.schema import (
     EstimatorSnapshot,
+    EventRecord,
     GroundTruth,
     ObservationRecord,
+    OutcomeRecord,
     Pose,
     SessionRecord,
     Trace,
@@ -23,8 +29,10 @@ from ar_signal_analysis.simulate import SimulationConfig, simulate_trace
 
 __all__ = [
     "EstimatorSnapshot",
+    "EventRecord",
     "GroundTruth",
     "ObservationRecord",
+    "OutcomeRecord",
     "Pose",
     "SessionRecord",
     "SimulationConfig",
@@ -33,6 +41,7 @@ __all__ = [
     "build_calibration_report",
     "ellipse_metrics",
     "estimator_inputs",
+    "estimator_inputs_by_device",
     "final_estimate_metrics",
     "format_estimator_inputs",
     "format_text_report",

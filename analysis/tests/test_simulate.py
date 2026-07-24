@@ -7,6 +7,7 @@ import pytest
 
 from ar_signal_analysis import SimulationConfig, load_trace, path_metrics, simulate_trace
 from ar_signal_analysis.cli import simulate_main
+from ar_signal_analysis.io import write_trace
 from ar_signal_analysis.simulate import expected_log_distance_rssi_dbm
 
 
@@ -19,14 +20,12 @@ def test_simulator_is_seeded_and_uses_student_t_outliers() -> None:
     assert [item.rssi_dbm for item in first.observations] == [
         item.rssi_dbm for item in second.observations
     ]
-    assert any(
-        item.advertisement["synthetic_outlier"] for item in first.observations
-    )
+    assert any(item.advertisement["synthetic_outlier"] for item in first.observations)
     assert first.session.metadata["simulation"]["student_t_df"] == 4.0  # type: ignore[index]
     assert path_metrics(first)["geometry_ratio"] > 0.1
 
 
-def test_accepts_explicit_path() -> None:
+def test_accepts_explicit_path(tmp_path: Path) -> None:
     config = SimulationConfig(
         sample_count=3,
         noise_scale_db=0.0,
@@ -38,19 +37,16 @@ def test_accepts_explicit_path() -> None:
     path = np.asarray([[1.0, 0.0], [2.0, 0.0], [4.0, 0.0]])
 
     trace = simulate_trace(config, path_xz_m=path)
+    trace = load_trace(write_trace(trace, tmp_path / "zero-noise.ndjson"))
 
+    assert all(
+        observation.rssi_variance_db2 is not None and observation.rssi_variance_db2 > 0.0
+        for observation in trace.observations
+    )
     assert [item.rssi_dbm for item in trace.observations] == [
         -52,
-        round(
-            expected_log_distance_rssi_dbm(
-                2.0, rssi_at_1m_dbm=-52.0, path_loss_exponent=2.2
-            )
-        ),
-        round(
-            expected_log_distance_rssi_dbm(
-                4.0, rssi_at_1m_dbm=-52.0, path_loss_exponent=2.2
-            )
-        ),
+        round(expected_log_distance_rssi_dbm(2.0, rssi_at_1m_dbm=-52.0, path_loss_exponent=2.2)),
+        round(expected_log_distance_rssi_dbm(4.0, rssi_at_1m_dbm=-52.0, path_loss_exponent=2.2)),
     ]
 
 

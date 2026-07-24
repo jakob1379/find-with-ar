@@ -15,6 +15,7 @@ import dev.arsignallocator.core.ElapsedRealtimeClock
 import dev.arsignallocator.localization.LocalizationAdapter
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
+import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.ui.SignalLocatorApp
 import java.io.File
 
@@ -63,11 +64,9 @@ class MainActivity : ComponentActivity() {
             SignalLocatorApp(
                 viewModel = viewModel,
                 arPoseSource = arPoseSource,
-                traceDirectory = traceDirectory,
                 onExport = ::exportTrace,
-                // Trace v2 integration owns the Found-it outcome and Devices exit survey.
                 onLeaveTracking = viewModel::stopAndReturnToDevices,
-                onFoundTarget = viewModel::stopAndReturnToDevices,
+                onFoundTarget = { viewModel.completeTrace(TraceOutcome.YES) },
                 onCompleteScan = {
                     showShellMessage("Complete Scan Pro is not connected in this build")
                 },
