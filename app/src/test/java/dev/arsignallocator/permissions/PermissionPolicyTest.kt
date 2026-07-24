@@ -32,4 +32,43 @@ class PermissionPolicyTest {
         )
         assertFalse(Manifest.permission.BLUETOOTH_SCAN in permissions)
     }
+
+    @Test
+    fun `Android 12 retries coarse and fine when only fine is missing`() {
+        assertEquals(
+            listOf(
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            ),
+            PermissionPolicy.permissionsToRequest(
+                missingPermissions = listOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                sdkInt = 31,
+            ),
+        )
+    }
+
+    @Test
+    fun `Android 12 retries coarse and fine when only coarse is missing`() {
+        assertEquals(
+            listOf(
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            ),
+            PermissionPolicy.permissionsToRequest(
+                missingPermissions = listOf(Manifest.permission.ACCESS_COARSE_LOCATION),
+                sdkInt = 31,
+            ),
+        )
+    }
+
+    @Test
+    fun `Android 11 retries only the missing location permission`() {
+        assertEquals(
+            listOf(Manifest.permission.ACCESS_FINE_LOCATION),
+            PermissionPolicy.permissionsToRequest(
+                missingPermissions = listOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                sdkInt = 30,
+            ),
+        )
+    }
 }

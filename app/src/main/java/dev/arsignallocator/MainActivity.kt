@@ -65,8 +65,24 @@ class MainActivity : ComponentActivity() {
                 arPoseSource = arPoseSource,
                 traceDirectory = traceDirectory,
                 onExport = ::exportTrace,
+                onCompleteScan = {
+                    showShellMessage("Complete Scan Pro is not connected in this build")
+                },
+                onPro = { showShellMessage("Pro purchases are not connected in this build") },
+                onDataHistory = { showShellMessage("Session history is not connected in this build") },
+                onPrivacyChoices = {
+                    showShellMessage("Privacy choices are not connected in this build")
+                },
+                onContactSupport = {
+                    showShellMessage("The publisher support address has not been configured")
+                },
+                onNotices = { showShellMessage("Third-party notices are not connected in this build") },
             )
         }
+    }
+
+    private fun showShellMessage(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     private fun exportTrace(file: File) {

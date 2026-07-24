@@ -2,7 +2,6 @@
 
 package dev.arsignallocator.ui
 
-import android.Manifest
 import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -11,6 +10,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -28,23 +28,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -64,20 +55,18 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.arsignallocator.BuildConfig
 import dev.arsignallocator.LocatorViewModel
 import dev.arsignallocator.ar.ArProjectionSnapshot
 import dev.arsignallocator.ar.ArCorePoseSource
 import dev.arsignallocator.model.AppScreen
 import dev.arsignallocator.model.ArRuntimeStatus
-import dev.arsignallocator.model.BluetoothTransport
-import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.permissions.PermissionPolicy
@@ -96,16 +85,30 @@ fun SignalLocatorApp(
     arPoseSource: ArCorePoseSource,
     traceDirectory: File,
     onExport: (File) -> Unit,
+    onCompleteScan: () -> Unit = {},
+    onPro: () -> Unit = {},
+    onDataHistory: () -> Unit = {},
+    onPrivacyChoices: () -> Unit = {},
+    onContactSupport: () -> Unit = {},
+    onNotices: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val preferences = remember(context) {
+        context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    }
+    var onboardingComplete by remember {
+        mutableStateOf(preferences.getBoolean(ONBOARDING_COMPLETE, false))
+    }
+    var devicePage by remember { mutableStateOf(DevicePage.PICKER) }
     var permissionRefresh by remember { mutableIntStateOf(0) }
-    var permissionWasRequested by remember { mutableStateOf(false) }
+    var permissionWasRequested by remember {
+        mutableStateOf(preferences.getBoolean(PERMISSIONS_REQUESTED, false))
+    }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
-        permissionWasRequested = true
         permissionRefresh += 1
         arPoseSource.retry()
     }
@@ -140,19 +143,40 @@ fun SignalLocatorApp(
     val bluetoothState = remember(permissionRefresh, missingPermissions) {
         bluetoothState(context, missingPermissions.isEmpty())
     }
-    val runtimeReady = missingPermissions.isEmpty() && bluetoothState == BluetoothUiState.ENABLED
+    val runtimeReady = onboardingComplete &&
+        missingPermissions.isEmpty() &&
+        bluetoothState == BluetoothUiState.ENABLED
 
     LaunchedEffect(runtimeReady) { viewModel.setRuntimeReady(runtimeReady) }
     LaunchedEffect(state.screen, runtimeReady) {
         arPoseSource.setActive(runtimeReady && state.screen != AppScreen.DEVICES)
     }
+    BackHandler(enabled = state.screen == AppScreen.DEVICES && devicePage != DevicePage.PICKER) {
+        devicePage = when (devicePage) {
+            DevicePage.PICKER -> DevicePage.PICKER
+            DevicePage.SETTINGS -> DevicePage.PICKER
+            DevicePage.HELP, DevicePage.ABOUT -> DevicePage.SETTINGS
+        }
+    }
 
     MaterialTheme(colorScheme = lightColorScheme()) {
         when {
+            !onboardingComplete -> OnboardingScreen(
+                onContinue = {
+                    preferences.edit().putBoolean(ONBOARDING_COMPLETE, true).apply()
+                    onboardingComplete = true
+                },
+            )
             missingPermissions.isNotEmpty() -> PermissionScreen(
                 missingPermissions = missingPermissions,
                 permissionWasRequested = permissionWasRequested,
-                onRequest = { permissionLauncher.launch(missingPermissions.toTypedArray()) },
+                onRequest = {
+                    permissionWasRequested = true
+                    preferences.edit().putBoolean(PERMISSIONS_REQUESTED, true).apply()
+                    permissionLauncher.launch(
+                        PermissionPolicy.permissionsToRequest(missingPermissions).toTypedArray(),
+                    )
+                },
                 onOpenSettings = { context.openAppSettings() },
             )
             bluetoothState != BluetoothUiState.ENABLED -> BluetoothScreen(
@@ -161,19 +185,40 @@ fun SignalLocatorApp(
                     bluetoothLauncher.launch(Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_ENABLE))
                 },
             )
-            state.screen == AppScreen.DEVICES -> DevicePickerScreen(
-                state = state,
-                onRefresh = viewModel::startDiscovery,
-                onSelect = { viewModel.selectDevice(it.handle.key) },
-                onExport = onExport,
-                onDelete = { viewModel.deleteLocalTraces(traceDirectory) },
-            )
+            state.screen == AppScreen.DEVICES -> when (devicePage) {
+                DevicePage.PICKER -> DevicePickerScreen(
+                    state = state,
+                    onRefresh = viewModel::startDiscovery,
+                    onSelect = {
+                        devicePage = DevicePage.PICKER
+                        viewModel.selectDevice(it.handle.key)
+                    },
+                    onCompleteScan = onCompleteScan,
+                    onSettings = { devicePage = DevicePage.SETTINGS },
+                    onExport = onExport,
+                    onDelete = { viewModel.deleteLocalTraces(traceDirectory) },
+                )
+                DevicePage.SETTINGS -> SettingsScreen(
+                    onBack = { devicePage = DevicePage.PICKER },
+                    onPro = onPro,
+                    onDataHistory = onDataHistory,
+                    onPrivacyChoices = onPrivacyChoices,
+                    onHelp = { devicePage = DevicePage.HELP },
+                    onContactSupport = onContactSupport,
+                    onAbout = { devicePage = DevicePage.ABOUT },
+                )
+                DevicePage.HELP -> HelpScreen(onBack = { devicePage = DevicePage.SETTINGS })
+                DevicePage.ABOUT -> AboutScreen(
+                    appVersion = BuildConfig.VERSION_NAME,
+                    onBack = { devicePage = DevicePage.SETTINGS },
+                    onNotices = onNotices,
+                )
+            }
             else -> TrackingScreen(
                 state = state,
                 arPoseSource = arPoseSource,
-                settings = state.screen == AppScreen.DEBUG,
                 onBack = viewModel::stopAndReturnToDevices,
-                onToggleSettings = {
+                onToggleVariantPanel = {
                     if (state.screen == AppScreen.DEBUG) viewModel.showTracking() else viewModel.showDebug()
                 },
                 onRetryAr = arPoseSource::retry,
@@ -185,18 +230,13 @@ fun SignalLocatorApp(
 
 private enum class BluetoothUiState { ENABLED, DISABLED, UNSUPPORTED, PERMISSION_MISSING }
 
-internal enum class LocationVisualization(val label: String) {
-    AR_HEATMAP("AR heatmap"),
-    AR_ELLIPSE("AR ellipse"),
-    AR_POINT("AR point"),
-    TOP_DOWN_MAP("Top-down map"),
-    BREADCRUMB_PATH("Breadcrumb path"),
-}
-
-internal fun Set<LocationVisualization>.toggled(
-    visualization: LocationVisualization,
-): Set<LocationVisualization> =
-    if (visualization in this) this - visualization else this + visualization
+internal data class TrackingVisualizations(
+    val arHeatmap: Boolean = true,
+    val arEllipse: Boolean = true,
+    val arPoint: Boolean = true,
+    val topDownMap: Boolean = true,
+    val breadcrumbPath: Boolean = true,
+)
 
 private fun bluetoothState(context: Context, permissionsGranted: Boolean): BluetoothUiState {
     if (!permissionsGranted) return BluetoothUiState.PERMISSION_MISSING
@@ -210,176 +250,18 @@ private fun bluetoothState(context: Context, permissionsGranted: Boolean): Bluet
 }
 
 @Composable
-private fun PermissionScreen(
-    missingPermissions: List<String>,
-    permissionWasRequested: Boolean,
-    onRequest: () -> Unit,
-    onOpenSettings: () -> Unit,
-) {
-    Scaffold(topBar = { TopAppBar(title = { Text("Signal Locator") }) }) { padding ->
-        Column(
-            modifier = Modifier.padding(padding).padding(24.dp).fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text("Nearby signal and camera access", style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "The camera measures how your phone moves. Bluetooth scanning and precise " +
-                    "location access observe nearby Bluetooth signals so the app can estimate a physical " +
-                    "area. Measurements stay on this phone unless you export a trace.",
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "Needed now: " + missingPermissions.joinToString { permissionLabel(it) },
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(20.dp))
-            Button(onClick = onRequest) { Text("Allow access") }
-            if (permissionWasRequested) {
-                TextButton(onClick = onOpenSettings) { Text("Open app settings") }
-            }
-        }
-    }
-}
-
-private fun permissionLabel(permission: String): String = when (permission) {
-    Manifest.permission.CAMERA -> "camera"
-    Manifest.permission.ACCESS_COARSE_LOCATION -> "approximate location"
-    Manifest.permission.ACCESS_FINE_LOCATION -> "precise location"
-    Manifest.permission.BLUETOOTH_SCAN -> "nearby-device scanning"
-    Manifest.permission.BLUETOOTH_CONNECT -> "Bluetooth status"
-    else -> permission.substringAfterLast('.')
-}
-
-@Composable
-private fun BluetoothScreen(unsupported: Boolean, onEnable: () -> Unit) {
-    Scaffold(topBar = { TopAppBar(title = { Text("Signal Locator") }) }) { padding ->
-        Column(
-            Modifier.padding(padding).padding(24.dp).fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text(
-                if (unsupported) "Bluetooth is not supported" else "Bluetooth is turned off",
-                style = MaterialTheme.typography.headlineSmall,
-            )
-            Spacer(Modifier.height(12.dp))
-            Text("A target must be observable through BLE advertisements or Bluetooth discovery.")
-            if (!unsupported) {
-                Spacer(Modifier.height(20.dp))
-                Button(onClick = onEnable) { Text("Turn on Bluetooth") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DevicePickerScreen(
-    state: LocatorUiState,
-    onRefresh: () -> Unit,
-    onSelect: (DeviceCandidate) -> Unit,
-    onExport: (File) -> Unit,
-    onDelete: () -> Unit,
-) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Nearby devices") },
-                actions = { TextButton(onClick = onRefresh) { Text("Scan again") } },
-            )
-        },
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier.padding(padding).fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item {
-                Text(
-                    if (state.isDiscovering) {
-                        "Scanning for ${state.discoverySecondsRemaining}s…"
-                    } else state.guidance,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                if (state.isDiscovering) {
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-                state.recoverableError?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(it, color = MaterialTheme.colorScheme.error)
-                }
-            }
-            items(state.candidates, key = { it.key.value }) { candidate ->
-                DeviceCard(candidate, onClick = { onSelect(candidate) })
-            }
-            state.lastTraceFile?.let { trace ->
-                item {
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                    Text("Last local trace", style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = { onExport(trace) }) { Text("Export") }
-                        TextButton(onClick = onDelete) { Text("Delete local traces") }
-                    }
-                }
-            }
-            item {
-                Text(
-                    "BLE targets must advertise. Bluetooth Classic targets must remain discoverable, " +
-                        "which is slower and can disrupt an active audio connection.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DeviceCard(candidate: DeviceCandidate, onClick: () -> Unit) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(candidate.displayName, style = MaterialTheme.typography.titleMedium)
-                Text(candidate.key.value, style = MaterialTheme.typography.labelMedium)
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Median ${candidate.medianRssiDbm.toInt()} dBm · " +
-                    "${"%.1f".format(candidate.observationsPerSecond)} packets/s",
-            )
-            Text(
-                when (candidate.handle.transport) {
-                    BluetoothTransport.LOW_ENERGY -> "Bluetooth Low Energy"
-                    BluetoothTransport.CLASSIC -> "Bluetooth Classic discovery"
-                },
-                style = MaterialTheme.typography.bodySmall,
-            )
-            val identifiers = buildList {
-                if (candidate.handle.manufacturerIds.isNotEmpty()) {
-                    add("Manufacturer ${candidate.handle.manufacturerIds.sorted().joinToString()}")
-                }
-                if (candidate.handle.serviceUuids.isNotEmpty()) {
-                    add("Services ${candidate.handle.serviceUuids.take(2).joinToString()}")
-                }
-            }
-            if (identifiers.isNotEmpty()) {
-                Text(identifiers.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
-@Composable
 private fun TrackingScreen(
     state: LocatorUiState,
     arPoseSource: ArCorePoseSource,
-    settings: Boolean,
     onBack: () -> Unit,
-    onToggleSettings: () -> Unit,
+    onToggleVariantPanel: () -> Unit,
     onRetryAr: () -> Unit,
     onExport: (File) -> Unit,
 ) {
     val projection by arPoseSource.projection.collectAsStateWithLifecycle()
-    var visualizations by remember { mutableStateOf(LocationVisualization.entries.toSet()) }
+    var visualizations by remember { mutableStateOf(TrackingVisualizations()) }
+    val variantPanelOpen = variantTrackingPanelAvailable && state.screen == AppScreen.DEBUG
+    BackHandler(onBack = onBack)
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
         val landscape = maxWidth > maxHeight
         val panelModifier = if (landscape) {
@@ -400,13 +282,13 @@ private fun TrackingScreen(
         ArFloorOverlay(
             projection = projection,
             estimate = state.estimate,
-            showHeatmap = LocationVisualization.AR_HEATMAP in visualizations,
-            showEllipse = LocationVisualization.AR_ELLIPSE in visualizations,
-            showPoint = LocationVisualization.AR_POINT in visualizations,
+            showHeatmap = visualizations.arHeatmap,
+            showEllipse = visualizations.arEllipse,
+            showPoint = visualizations.arPoint,
             modifier = Modifier.fillMaxSize(),
         )
-        val showMap = LocationVisualization.TOP_DOWN_MAP in visualizations
-        val showBreadcrumbs = LocationVisualization.BREADCRUMB_PATH in visualizations
+        val showMap = visualizations.topDownMap
+        val showBreadcrumbs = visualizations.breadcrumbPath
         if (showMap || showBreadcrumbs) {
             TopDownMap(
                 breadcrumbs = state.breadcrumbs,
@@ -425,16 +307,21 @@ private fun TrackingScreen(
         ) {
             TextButton(onClick = onBack) { Text("‹ Devices", color = Color.White) }
             Text(state.selected?.displayName.orEmpty(), color = Color.White)
-            TextButton(onClick = onToggleSettings) {
-                Text(if (settings) "Find" else "Settings", color = Color.White)
+            if (variantTrackingPanelAvailable) {
+                VariantTrackingAction(
+                    open = variantPanelOpen,
+                    onToggle = onToggleVariantPanel,
+                )
+            } else {
+                Spacer(Modifier.width(80.dp))
             }
         }
 
-        if (settings) {
-            SettingsPanel(
+        if (variantPanelOpen) {
+            VariantTrackingPanel(
                 state,
                 visualizations,
-                onToggleVisualization = { visualizations = visualizations.toggled(it) },
+                onVisualizationsChange = { visualizations = it },
                 onExport = onExport,
                 modifier = if (landscape) panelModifier else panelModifier.fillMaxHeight(0.48f),
             )
@@ -560,90 +447,9 @@ private fun TrackingStatusPanel(state: LocatorUiState, modifier: Modifier = Modi
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("colder", color = Color.LightGray, style = MaterialTheme.typography.labelSmall)
-                Text(
-                    state.metrics.rollingMedianRssiDbm?.let { "${it.toInt()} dBm" } ?: "waiting",
-                    color = Color.White,
-                )
                 Text("warmer", color = Color.LightGray, style = MaterialTheme.typography.labelSmall)
             }
-            state.estimate?.regionAreaSquareMetres?.let { area ->
-                Text(
-                    "Uncalibrated 90% model region: ${"%.1f".format(area)} m²",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
         }
-    }
-}
-
-@Composable
-private fun SettingsPanel(
-    state: LocatorUiState,
-    visualizations: Set<LocationVisualization>,
-    onToggleVisualization: (LocationVisualization) -> Unit,
-    onExport: (File) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(modifier, color = Color.Black.copy(alpha = 0.82f)) {
-        LazyColumn(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            item { Text("Settings", color = Color.White, style = MaterialTheme.typography.titleMedium) }
-            item { Text("Location visualizations", color = Color.White, style = MaterialTheme.typography.titleSmall) }
-            items(LocationVisualization.entries) { visualization ->
-                VisualizationToggle(
-                    visualization.label,
-                    visualization in visualizations,
-                    onToggle = { onToggleVisualization(visualization) },
-                )
-            }
-            state.lastTraceFile?.let { trace ->
-                item {
-                    FilledTonalButton(onClick = { onExport(trace) }) {
-                        Text("Export trace")
-                    }
-                }
-            }
-            item { HorizontalDivider(Modifier.padding(vertical = 4.dp), color = Color.DarkGray) }
-            item { Text("Session diagnostics", color = Color.White, style = MaterialTheme.typography.titleSmall) }
-            item { DebugRow("AR", state.arStatus.status.name) }
-            item { DebugRow("RSSI raw / median", "${state.metrics.rawRssiDbm} / ${state.metrics.rollingMedianRssiDbm?.toInt()}") }
-            item { DebugRow("Packets", state.metrics.receivedCount.toString()) }
-            item { DebugRow("Independent updates", state.metrics.acceptedCount.toString()) }
-            item { DebugRow("Rejected: no pose", state.metrics.rejectedNoPoseCount.toString()) }
-            item { DebugRow("Path", "${"%.2f".format(state.metrics.pathLengthMetres)} m") }
-            item { DebugRow("Estimator", state.estimate?.status ?: "not initialized") }
-            item { DebugRow("Ambiguity", state.estimate?.ambiguity?.let { "%.3f".format(it) } ?: "—") }
-            item { DebugRow("Region area", state.estimate?.regionAreaSquareMetres?.let { "%.2f m²".format(it) } ?: "—") }
-            item {
-                DebugRow(
-                    "Covariance xx/xz/zz",
-                    state.estimate?.let { "${it.covarianceXX} / ${it.covarianceXZ} / ${it.covarianceZZ}" }
-                        ?: "—",
-                )
-            }
-            state.recoverableError?.let { item { Text(it, color = Color(0xFFFFB4AB)) } }
-        }
-    }
-}
-
-@Composable
-private fun VisualizationToggle(label: String, checked: Boolean, onToggle: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().toggleable(checked, role = Role.Switch, onValueChange = { onToggle() }),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, color = Color.White)
-        Switch(checked = checked, onCheckedChange = null)
-    }
-}
-
-@Composable
-private fun DebugRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = Color.LightGray)
-        Spacer(Modifier.width(12.dp))
-        Text(value, color = Color.White)
     }
 }
 
@@ -773,3 +579,6 @@ private fun Context.openAppSettings() {
 private const val AR_HEAT_CELL_LIMIT = 160
 private const val AR_ELLIPSE_SEGMENTS = 48
 private const val CHI_SQUARED_90 = 4.605170186
+private const val PREFERENCES_NAME = "ui_shell"
+private const val ONBOARDING_COMPLETE = "onboarding_complete"
+private const val PERMISSIONS_REQUESTED = "permissions_requested"

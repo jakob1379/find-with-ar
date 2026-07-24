@@ -25,4 +25,22 @@ object PermissionPolicy {
         grantedPermissions: Set<String>,
         sdkInt: Int = Build.VERSION.SDK_INT,
     ): List<String> = requiredPermissions(sdkInt).filterNot(grantedPermissions::contains)
+
+    fun permissionsToRequest(
+        missingPermissions: Collection<String>,
+        sdkInt: Int = Build.VERSION.SDK_INT,
+    ): List<String> {
+        val requestLocationPair = sdkInt >= Build.VERSION_CODES.S &&
+            missingPermissions.any {
+                it == Manifest.permission.ACCESS_COARSE_LOCATION ||
+                    it == Manifest.permission.ACCESS_FINE_LOCATION
+            }
+        return requiredPermissions(sdkInt).filter {
+            it in missingPermissions ||
+                requestLocationPair && (
+                    it == Manifest.permission.ACCESS_COARSE_LOCATION ||
+                        it == Manifest.permission.ACCESS_FINE_LOCATION
+                    )
+        }
+    }
 }

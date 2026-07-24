@@ -18,6 +18,7 @@ class TargetHandle internal constructor(
     val manufacturerIds: Set<Int>,
     val serviceUuids: Set<String>,
     val transport: BluetoothTransport = BluetoothTransport.LOW_ENERGY,
+    val bonded: Boolean = false,
 )
 
 data class BleObservation(

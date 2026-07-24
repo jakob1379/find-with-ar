@@ -20,6 +20,7 @@ import dev.arsignallocator.ar.PoseSource
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
 import java.io.File
+import java.util.Locale
 import kotlin.math.hypot
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +57,7 @@ class LocatorViewModel(
     private var arStatusJob: Job? = null
     private var traceActive = false
     private val candidateAccumulators = linkedMapOf<DeviceKey, CandidateAccumulator>()
+    private var candidateOrder = emptyList<DeviceKey>()
     private var lastBreadcrumb: PoseObservation? = null
 
     fun bindPoseSource(source: PoseSource) {
@@ -95,6 +97,12 @@ class LocatorViewModel(
         stopTrackingJobs()
         discoveryJob?.cancel()
         candidateAccumulators.clear()
+        candidateOrder = updateCandidateOrder(
+            previous = candidateOrder,
+            candidates = emptyList(),
+            discoveryActive = true,
+            freshScan = true,
+        )
         _state.update {
             it.copy(
                 screen = AppScreen.DEVICES,
@@ -117,11 +125,16 @@ class LocatorViewModel(
                 .catch { error -> fail(error.message ?: "Bluetooth discovery failed") }
                 .collect(::onDiscovered)
             countdown.cancel()
+            val rankedCandidates = orderCandidates(
+                _state.value.candidates,
+                discoveryActive = false,
+            )
             _state.update {
                 it.copy(
                     isDiscovering = false,
                     discoverySecondsRemaining = 0,
-                    guidance = if (it.candidates.isEmpty()) {
+                    candidates = rankedCandidates,
+                    guidance = if (rankedCandidates.isEmpty()) {
                         "No observable Bluetooth device found. Wake it, enable pairing mode, and retry"
                     } else {
                         "Select the device you want to locate"
@@ -220,16 +233,26 @@ class LocatorViewModel(
         }
         accumulator.add(packet)
         val now = clock.nowNanos()
+        val orderedCandidates = orderCandidates(
+            candidateAccumulators.values.map { accumulatorValue ->
+                accumulatorValue.snapshot(now)
+            },
+            discoveryActive = true,
+        )
         _state.update {
             it.copy(
-                candidates = candidateAccumulators.values
-                    .map { accumulatorValue -> accumulatorValue.snapshot(now) }
-                    .sortedWith(
-                        compareByDescending<DeviceCandidate> { candidate -> candidate.medianRssiDbm }
-                            .thenBy(DeviceCandidate::displayName),
-                    ),
+                candidates = orderedCandidates,
             )
         }
+    }
+
+    private fun orderCandidates(
+        candidates: List<DeviceCandidate>,
+        discoveryActive: Boolean,
+    ): List<DeviceCandidate> {
+        candidateOrder = updateCandidateOrder(candidateOrder, candidates, discoveryActive)
+        val byKey = candidates.associateBy(DeviceCandidate::key)
+        return candidateOrder.mapNotNull(byKey::get)
     }
 
     private suspend fun processTrackedPacket(packet: ScanPacket) {
@@ -318,7 +341,7 @@ class LocatorViewModel(
                 if (state.estimate.meanXMetres == null || area == null) {
                     "Collecting a more reliable location region"
                 } else {
-                    "Likely region found (~${"%.1f".format(area)} m² model area)"
+                    "Likely area found. Keep moving to confirm it"
                 }
             }
             else -> "Collecting. Keep moving around the room"
@@ -407,5 +430,24 @@ class LocatorViewModel(
         const val TARGET_LOST_NANOS = 5_000_000_000L
         const val CLASSIC_TARGET_LOST_NANOS = 20_000_000_000L
         const val CANDIDATE_WINDOW_NANOS = 5_000_000_000L
+    }
+}
+
+internal fun updateCandidateOrder(
+    previous: List<DeviceKey>,
+    candidates: List<DeviceCandidate>,
+    discoveryActive: Boolean,
+    freshScan: Boolean = false,
+): List<DeviceKey> {
+    val observed = candidates.map(DeviceCandidate::key)
+    return when {
+        freshScan -> observed
+        discoveryActive -> (previous + observed).distinct()
+        else -> candidates.sortedWith(
+            compareByDescending<DeviceCandidate> { it.handle.bonded }
+                .thenByDescending { it.medianRssiDbm }
+                .thenBy { it.displayName.lowercase(Locale.ROOT) }
+                .thenBy { it.key.value },
+        ).map(DeviceCandidate::key)
     }
 }

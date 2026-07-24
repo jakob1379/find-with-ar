@@ -281,6 +281,7 @@ class AndroidBleScanner(
             manufacturerIds = emptySet(),
             serviceUuids = services,
             transport = transport,
+            bonded = device.bondState == BluetoothDevice.BOND_BONDED,
         )
         return ScanPacket(
             target = handle,
@@ -330,6 +331,7 @@ class AndroidBleScanner(
             manufacturerIds = manufacturerIds,
             serviceUuids = services,
             transport = BluetoothTransport.LOW_ENERGY,
+            bonded = device.bondState == BluetoothDevice.BOND_BONDED,
         )
         val txPower = record?.txPowerLevel?.takeUnless { it == Int.MIN_VALUE }
         val observation = BleObservation(
