@@ -8,16 +8,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -39,9 +41,8 @@ class UiShellAccessibilityTest {
     fun onboardingIllustrationAndContinueRemainAccessibleAtCompactLargeText() {
         setContent { OnboardingScreen {} }
 
-        compose.onNodeWithContentDescription(ILLUSTRATION_DESCRIPTION).assertIsDisplayed()
-        compose.onNode(hasText("Continue") and hasClickAction())
-            .performScrollTo()
+        scrollTo(hasContentDescription(ILLUSTRATION_DESCRIPTION)).assertExists()
+        scrollTo(hasText("Continue") and hasClickAction())
             .assertIsDisplayed()
             .assertMinimumTouchTarget()
     }
@@ -57,8 +58,7 @@ class UiShellAccessibilityTest {
             )
         }
 
-        compose.onNode(hasText("Open app settings") and hasClickAction())
-            .performScrollTo()
+        scrollTo(hasText("Open app settings") and hasClickAction())
             .assertIsDisplayed()
             .assertMinimumTouchTarget()
     }
@@ -67,8 +67,7 @@ class UiShellAccessibilityTest {
     fun bluetoothRecoveryRemainsScrollableAtCompactLargeText() {
         setContent { BluetoothScreen(unsupported = false, onEnable = {}) }
 
-        compose.onNode(hasText("Turn on Bluetooth") and hasClickAction())
-            .performScrollTo()
+        scrollTo(hasText("Turn on Bluetooth") and hasClickAction())
             .assertIsDisplayed()
             .assertMinimumTouchTarget()
     }
@@ -77,12 +76,10 @@ class UiShellAccessibilityTest {
     fun pickerReachesItsFinalDeviceAndGuidanceAtCompactLargeText() {
         setContent { Picker() }
 
-        compose.onNode(hasText("Last beacon") and hasClickAction())
-            .performScrollTo()
+        scrollTo(hasText("Last beacon") and hasClickAction())
             .assertIsDisplayed()
             .assertMinimumTouchTarget()
-        compose.onNodeWithText(PICKER_FINAL_GUIDANCE)
-            .performScrollTo()
+        scrollTo(hasText(PICKER_FINAL_GUIDANCE))
             .assertIsDisplayed()
     }
 
@@ -155,6 +152,11 @@ class UiShellAccessibilityTest {
         val minimum = with(TEST_DENSITY) { 48.dp.toPx() }
         assertTrue("Expected at least 48dp touch width, was $bounds", bounds.width >= minimum)
         assertTrue("Expected at least 48dp touch height, was $bounds", bounds.height >= minimum)
+    }
+
+    private fun scrollTo(matcher: SemanticsMatcher): SemanticsNodeInteraction {
+        compose.onNode(hasScrollAction()).performScrollToNode(matcher)
+        return compose.onNode(matcher)
     }
 
     private fun candidate(name: String, key: String) = DeviceCandidate(
