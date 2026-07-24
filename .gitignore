@@ -14,3 +14,5 @@ analysis/**/__pycache__/
 captures/
 local.properties
 *.iml
+/.desloppify/
+/scorecard.png
