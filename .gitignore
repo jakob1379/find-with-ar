@@ -2,6 +2,7 @@
 .direnv/
 .gradle/
 .gradle-home/
+.gradle-user-home/
 .idea/
 .kotlin/
 .pytest_cache/
