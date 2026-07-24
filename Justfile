@@ -20,7 +20,7 @@ install:
     ./gradlew --no-daemon :app:installDebug
 
 capture: install
-    adb shell am start -n dev.arsignallocator/.MainActivity
+    adb shell am start -n dev.arsignallocator.debug/dev.arsignallocator.MainActivity
 
 connected-check:
     ./gradlew --no-daemon :app:connectedDebugAndroidTest
