@@ -1,14 +1,20 @@
 # AR Device Finder — v1 product and publishing specification
 
-- Status: approved scope, implementation pending
+- Status: application software implemented; publishing validation pending
 - Target release: Google Play `1.0.0`
-- Last updated: 24 July 2026
+- Last updated: 25 July 2026
 
 This document defines the public v1 product and its release gates. Requirements are
 release-blocking unless explicitly marked as post-v1. Estimator design and current
 implementation evidence remain in
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md); trace details and physical
 experiments remain in the other documents under `docs/`.
+
+As of 25 July 2026, the application-side v1 scope is implemented and passes the
+repository checks, signed release-bundle checks, and the connected Android 13 test suite.
+Publication remains blocked on real publisher configuration, Play/store declarations,
+the multi-phone and radio-target matrix, labelled-room accuracy trials, accessibility
+manual checks, and closed testing defined in section 8.
 
 ## 1. Product definition
 
