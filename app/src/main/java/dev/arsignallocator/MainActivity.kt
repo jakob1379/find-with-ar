@@ -65,6 +65,9 @@ class MainActivity : ComponentActivity() {
                 arPoseSource = arPoseSource,
                 traceDirectory = traceDirectory,
                 onExport = ::exportTrace,
+                // Trace v2 integration owns the Found-it outcome and Devices exit survey.
+                onLeaveTracking = viewModel::stopAndReturnToDevices,
+                onFoundTarget = viewModel::stopAndReturnToDevices,
                 onCompleteScan = {
                     showShellMessage("Complete Scan Pro is not connected in this build")
                 },

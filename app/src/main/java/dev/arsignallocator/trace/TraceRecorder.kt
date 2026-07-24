@@ -1,6 +1,7 @@
 package dev.arsignallocator.trace
 
 import dev.arsignallocator.model.EstimateUiModel
+import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
 import dev.arsignallocator.model.SynchronizedObservation
 import dev.arsignallocator.model.TargetHandle
 import java.io.BufferedWriter
@@ -159,7 +160,7 @@ object TraceJsonEncoder {
             append("null")
         } else {
             append('{')
-            field("kind", if (estimate.status == "EKF") "ekf" else "bayesian_grid", first = true)
+            field("kind", if (estimate.status == ESTIMATE_STATUS_EKF) "ekf" else "bayesian_grid", first = true)
             field("status", estimate.status.lowercase(Locale.ROOT))
             nullableField("mean_x_m", estimate.meanXMetres)
             nullableField("mean_z_m", estimate.meanZMetres)

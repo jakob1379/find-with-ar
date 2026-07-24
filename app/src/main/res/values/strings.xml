@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">AR Device Finder</string>
+    <string name="tracking_signal_colder">Colder</string>
+    <string name="tracking_signal_warmer">Warmer</string>
+    <string name="tracking_found">Found it</string>
+    <string name="tracking_found_accessibility">Found the selected device</string>
+    <string name="tracking_devices">Devices</string>
+    <string name="tracking_devices_accessibility">Leave tracking and return to devices</string>
 </resources>

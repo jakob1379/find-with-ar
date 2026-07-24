@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,18 +21,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -42,6 +41,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,6 +55,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -67,10 +69,12 @@ import dev.arsignallocator.ar.ArProjectionSnapshot
 import dev.arsignallocator.ar.ArCorePoseSource
 import dev.arsignallocator.model.AppScreen
 import dev.arsignallocator.model.ArRuntimeStatus
+import dev.arsignallocator.model.DeviceKey
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.permissions.PermissionPolicy
 import java.io.File
+import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -85,12 +89,16 @@ fun SignalLocatorApp(
     arPoseSource: ArCorePoseSource,
     traceDirectory: File,
     onExport: (File) -> Unit,
+    onLeaveTracking: () -> Unit,
+    onFoundTarget: () -> Unit,
     onCompleteScan: () -> Unit = {},
     onPro: () -> Unit = {},
     onDataHistory: () -> Unit = {},
     onPrivacyChoices: () -> Unit = {},
     onContactSupport: () -> Unit = {},
     onNotices: () -> Unit = {},
+    trackingBannerVisible: Boolean = false,
+    trackingBanner: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -217,12 +225,15 @@ fun SignalLocatorApp(
             else -> TrackingScreen(
                 state = state,
                 arPoseSource = arPoseSource,
-                onBack = viewModel::stopAndReturnToDevices,
+                onLeaveSession = onLeaveTracking,
+                onFoundTarget = onFoundTarget,
                 onToggleVariantPanel = {
                     if (state.screen == AppScreen.DEBUG) viewModel.showTracking() else viewModel.showDebug()
                 },
                 onRetryAr = arPoseSource::retry,
                 onExport = onExport,
+                bannerVisible = trackingBannerVisible,
+                bannerContent = trackingBanner,
             )
         }
     }
@@ -253,26 +264,160 @@ private fun bluetoothState(context: Context, permissionsGranted: Boolean): Bluet
 private fun TrackingScreen(
     state: LocatorUiState,
     arPoseSource: ArCorePoseSource,
-    onBack: () -> Unit,
+    onLeaveSession: () -> Unit,
+    onFoundTarget: () -> Unit,
     onToggleVariantPanel: () -> Unit,
     onRetryAr: () -> Unit,
     onExport: (File) -> Unit,
+    bannerVisible: Boolean,
+    bannerContent: (@Composable () -> Unit)?,
 ) {
     val projection by arPoseSource.projection.collectAsStateWithLifecycle()
     var visualizations by remember { mutableStateOf(TrackingVisualizations()) }
+    val lastSeen = state.metrics.lastSeenElapsedNanos ?: state.selected?.lastSeenElapsedNanos
+    var nowElapsedNanos by remember(state.selected?.key, lastSeen) {
+        mutableLongStateOf(SystemClock.elapsedRealtimeNanos())
+    }
     val variantPanelOpen = variantTrackingPanelAvailable && state.screen == AppScreen.DEBUG
-    BackHandler(onBack = onBack)
+    val policy = trackingUiPolicy(state, nowElapsedNanos)
+    val displayedEstimate = rememberVisibleEstimate(
+        targetKey = state.selected?.key,
+        current = state.estimate,
+        frozen = policy.freezesEstimate,
+    )
+    val statusContent = trackingStatusContent(policy, displayedEstimate != null)
+    val automaticVisualization = selectEstimateVisualization(displayedEstimate)
+    val showHeatmap = if (variantTrackingPanelAvailable) {
+        visualizations.arHeatmap
+    } else {
+        automaticVisualization != EstimateVisualization.HIDDEN
+    }
+    val showEllipse = if (variantTrackingPanelAvailable) {
+        visualizations.arEllipse
+    } else {
+        automaticVisualization != EstimateVisualization.HIDDEN
+    }
+    val showPoint = if (variantTrackingPanelAvailable) {
+        visualizations.arPoint
+    } else {
+        automaticVisualization == EstimateVisualization.POINT
+    }
+    val showMap = if (variantTrackingPanelAvailable) {
+        visualizations.topDownMap
+    } else {
+        automaticVisualization != EstimateVisualization.HIDDEN
+    }
+    val showBreadcrumbs = if (variantTrackingPanelAvailable) {
+        visualizations.breadcrumbPath
+    } else {
+        true
+    }
+    LaunchedEffect(state.selected?.key, lastSeen) {
+        while (true) {
+            nowElapsedNanos = SystemClock.elapsedRealtimeNanos()
+            delay(SIGNAL_FRESHNESS_TICK_MILLIS)
+        }
+    }
+    BackHandler(onBack = onLeaveSession)
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-        val landscape = maxWidth > maxHeight
-        val panelModifier = if (landscape) {
-            Modifier.align(Alignment.CenterStart)
-                .padding(top = 64.dp)
-                .width(minOf(maxWidth * 0.36f, 280.dp))
-                .fillMaxHeight()
-        } else {
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+        val layout = selectTrackingLayout(maxWidth.value, maxHeight.value)
+        val bottomControlsMaxHeight =
+            maxHeight * if (layout == TrackingLayout.PORTRAIT_BOTTOM) 0.44f else 0.52f
+        val camera: @Composable (Modifier) -> Unit = { modifier ->
+            TrackingCamera(
+                state = state,
+                projection = projection,
+                arPoseSource = arPoseSource,
+                estimate = displayedEstimate,
+                visualization = automaticVisualization,
+                showHeatmap = showHeatmap,
+                showEllipse = showEllipse,
+                showPoint = showPoint,
+                showMap = showMap,
+                showBreadcrumbs = showBreadcrumbs,
+                statusContent = statusContent,
+                onRetryAr = onRetryAr,
+                modifier = modifier,
+            )
+        }
+        val controls: @Composable (Modifier) -> Unit = { modifier ->
+            TrackingControls(
+                state = state,
+                policy = policy,
+                statusContent = statusContent,
+                variantPanelOpen = variantPanelOpen,
+                visualizations = visualizations,
+                onVisualizationsChange = { visualizations = it },
+                onLeaveSession = onLeaveSession,
+                onFoundTarget = onFoundTarget,
+                onToggleVariantPanel = onToggleVariantPanel,
+                onExport = onExport,
+                modifier = modifier,
+            )
         }
 
+        when (layout) {
+            TrackingLayout.LANDSCAPE_SIDE_RAIL -> Row(Modifier.fillMaxSize()) {
+                camera(Modifier.weight(1f).fillMaxHeight())
+                Column(Modifier.width(320.dp).fillMaxHeight()) {
+                    controls(Modifier.weight(1f).fillMaxWidth())
+                    bannerContent?.let {
+                        TrackingBannerSlot(
+                            visible = bannerVisible,
+                            sideRail = true,
+                            content = it,
+                        )
+                    }
+                }
+            }
+            TrackingLayout.PORTRAIT_BOTTOM,
+            TrackingLayout.LANDSCAPE_BOTTOM,
+            -> Column(Modifier.fillMaxSize()) {
+                camera(Modifier.weight(1f).fillMaxWidth())
+                controls(
+                    Modifier.fillMaxWidth().heightIn(
+                        max = bottomControlsMaxHeight,
+                    ),
+                )
+                bannerContent?.let {
+                    TrackingBannerSlot(
+                        visible = bannerVisible,
+                        sideRail = false,
+                        content = it,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun rememberVisibleEstimate(
+    targetKey: DeviceKey?,
+    current: EstimateUiModel?,
+    frozen: Boolean,
+): EstimateUiModel? {
+    val remembered = remember(targetKey) { RememberedEstimate(current) }
+    return remembered.update(current, frozen)
+}
+
+@Composable
+private fun TrackingCamera(
+    state: LocatorUiState,
+    projection: ArProjectionSnapshot?,
+    arPoseSource: ArCorePoseSource,
+    estimate: EstimateUiModel?,
+    visualization: EstimateVisualization,
+    showHeatmap: Boolean,
+    showEllipse: Boolean,
+    showPoint: Boolean,
+    showMap: Boolean,
+    showBreadcrumbs: Boolean,
+    statusContent: TrackingStatusContent,
+    onRetryAr: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier.background(Color.Black)) {
         if (!LocalInspectionMode.current) {
             AndroidView(
                 factory = { arPoseSource.surfaceView },
@@ -281,54 +426,24 @@ private fun TrackingScreen(
         }
         ArFloorOverlay(
             projection = projection,
-            estimate = state.estimate,
-            showHeatmap = visualizations.arHeatmap,
-            showEllipse = visualizations.arEllipse,
-            showPoint = visualizations.arPoint,
+            estimate = estimate,
+            showHeatmap = showHeatmap,
+            showEllipse = showEllipse,
+            showPoint = showPoint,
             modifier = Modifier.fillMaxSize(),
         )
-        val showMap = visualizations.topDownMap
-        val showBreadcrumbs = visualizations.breadcrumbPath
         if (showMap || showBreadcrumbs) {
             TopDownMap(
                 breadcrumbs = state.breadcrumbs,
-                estimate = state.estimate,
+                estimate = estimate,
                 projection = projection,
                 showEstimate = showMap,
+                showPoint = showPoint,
                 showBreadcrumbs = showBreadcrumbs,
-                modifier = Modifier.align(Alignment.TopEnd).padding(top = 72.dp, end = 12.dp).size(176.dp),
+                talkBackSummary = estimateTalkBackSummary(statusContent, visualization),
+                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp).size(176.dp),
             )
         }
-        Row(
-            modifier = Modifier.align(Alignment.TopStart).fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.62f)).padding(8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack) { Text("‹ Devices", color = Color.White) }
-            Text(state.selected?.displayName.orEmpty(), color = Color.White)
-            if (variantTrackingPanelAvailable) {
-                VariantTrackingAction(
-                    open = variantPanelOpen,
-                    onToggle = onToggleVariantPanel,
-                )
-            } else {
-                Spacer(Modifier.width(80.dp))
-            }
-        }
-
-        if (variantPanelOpen) {
-            VariantTrackingPanel(
-                state,
-                visualizations,
-                onVisualizationsChange = { visualizations = it },
-                onExport = onExport,
-                modifier = if (landscape) panelModifier else panelModifier.fillMaxHeight(0.48f),
-            )
-        } else {
-            TrackingStatusPanel(state, panelModifier)
-        }
-
         if (state.arStatus.status in setOf(
                 ArRuntimeStatus.ERROR,
                 ArRuntimeStatus.CAMERA_UNAVAILABLE,
@@ -341,7 +456,7 @@ private fun TrackingScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
             ) {
                 Column(Modifier.padding(16.dp)) {
-                    Text(state.arStatus.detail ?: "AR is unavailable")
+                    Text(statusContent.instruction)
                     if (state.arStatus.recoverable) {
                         TextButton(onClick = onRetryAr) { Text("Retry AR") }
                     }
@@ -430,36 +545,14 @@ private fun ArFloorOverlay(
 }
 
 @Composable
-private fun TrackingStatusPanel(state: LocatorUiState, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier,
-        color = Color.Black.copy(alpha = 0.72f),
-    ) {
-        Column(Modifier.padding(18.dp)) {
-            Text(state.guidance, color = Color.White, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(10.dp))
-            val signal = (((state.metrics.rollingMedianRssiDbm ?: -100.0) + 100.0) / 70.0)
-                .coerceIn(0.0, 1.0).toFloat()
-            LinearProgressIndicator(
-                progress = { signal },
-                modifier = Modifier.fillMaxWidth().height(8.dp),
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("colder", color = Color.LightGray, style = MaterialTheme.typography.labelSmall)
-                Text("warmer", color = Color.LightGray, style = MaterialTheme.typography.labelSmall)
-            }
-        }
-    }
-}
-
-@Composable
 private fun TopDownMap(
     breadcrumbs: List<Pair<Double, Double>>,
     estimate: EstimateUiModel?,
     projection: ArProjectionSnapshot?,
     showEstimate: Boolean,
+    showPoint: Boolean,
     showBreadcrumbs: Boolean,
+    talkBackSummary: String,
     modifier: Modifier = Modifier,
 ) {
     val visibleBreadcrumbs = breadcrumbs.takeIf { showBreadcrumbs }.orEmpty()
@@ -472,7 +565,11 @@ private fun TopDownMap(
             add(visibleEstimate.meanXMetres to visibleEstimate.meanZMetres)
         }
     }
-    Surface(modifier, shape = RoundedCornerShape(14.dp), color = Color.Black.copy(alpha = 0.70f)) {
+    Surface(
+        modifier.semantics { contentDescription = talkBackSummary },
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Black.copy(alpha = 0.70f),
+    ) {
         Canvas(Modifier.fillMaxSize().padding(10.dp)) {
             if (points.isEmpty()) {
                 drawCircle(Color.White.copy(alpha = 0.8f), radius = 4.dp.toPx(), center = center)
@@ -528,7 +625,7 @@ private fun TopDownMap(
                     )
                 }
             }
-            if (meanX != null && meanZ != null) {
+            if (showPoint && meanX != null && meanZ != null) {
                 drawCircle(Color.Yellow, 4.dp.toPx(), project(meanX, meanZ))
             }
             val cameraPose = projection?.cameraPose
@@ -582,3 +679,4 @@ private const val CHI_SQUARED_90 = 4.605170186
 private const val PREFERENCES_NAME = "ui_shell"
 private const val ONBOARDING_COMPLETE = "onboarding_complete"
 private const val PERMISSIONS_REQUESTED = "permissions_requested"
+private const val SIGNAL_FRESHNESS_TICK_MILLIS = 500L

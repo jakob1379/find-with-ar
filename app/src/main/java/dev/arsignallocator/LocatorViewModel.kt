@@ -12,6 +12,9 @@ import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.DeviceKey
+import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
+import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_MULTIMODAL
+import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_UNIMODAL
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
@@ -316,6 +319,7 @@ class LocatorViewModel(
         if (state.screen != AppScreen.DEVICES && ar.status != ArRuntimeStatus.TRACKING
         ) return ar.detail ?: "AR tracking is unavailable; retry when it recovers"
         val lastSeen = state.metrics.lastSeenElapsedNanos
+            ?: state.selected?.lastSeenElapsedNanos
         val targetLostNanos = if (state.selected?.handle?.transport == BluetoothTransport.CLASSIC) {
             CLASSIC_TARGET_LOST_NANOS
         } else {
@@ -335,8 +339,8 @@ class LocatorViewModel(
             return "Signal found. Move sideways to measure from another position"
         }
         return when (state.estimate?.status) {
-            "GRID_MULTIMODAL" -> "Several areas still fit. Walk around the other side"
-            "GRID_UNIMODAL", "EKF" -> {
+            ESTIMATE_STATUS_GRID_MULTIMODAL -> "Several areas still fit. Walk around the other side"
+            ESTIMATE_STATUS_GRID_UNIMODAL, ESTIMATE_STATUS_EKF -> {
                 val area = state.estimate.regionAreaSquareMetres
                 if (state.estimate.meanXMetres == null || area == null) {
                     "Collecting a more reliable location region"

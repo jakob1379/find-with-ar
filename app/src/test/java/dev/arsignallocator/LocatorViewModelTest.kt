@@ -10,6 +10,7 @@ import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.ArStatus
 import dev.arsignallocator.model.BleObservation
 import dev.arsignallocator.model.DeviceKey
+import dev.arsignallocator.model.ESTIMATE_STATUS_COLLECTING
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
@@ -122,7 +123,7 @@ class LocatorViewModelTest {
     private class FakeLocationEngine : LocationEngine {
         var updates = 0
         private val current = EstimateUiModel(
-            status = "COLLECTING",
+            status = ESTIMATE_STATUS_COLLECTING,
             meanXMetres = null,
             meanZMetres = null,
             covarianceXX = null,

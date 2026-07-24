@@ -85,6 +85,12 @@ data class EstimateUiModel(
     val probabilityCells: List<ProbabilityCell> = emptyList(),
 )
 
+const val ESTIMATE_STATUS_COLLECTING = "COLLECTING"
+const val ESTIMATE_STATUS_GRID_MULTIMODAL = "GRID_MULTIMODAL"
+const val ESTIMATE_STATUS_GRID_UNIMODAL = "GRID_UNIMODAL"
+const val ESTIMATE_STATUS_EKF = "EKF"
+val POINT_ESTIMATE_STATUSES = setOf(ESTIMATE_STATUS_GRID_UNIMODAL, ESTIMATE_STATUS_EKF)
+
 data class ProbabilityCell(
     val xMetres: Double,
     val zMetres: Double,
