@@ -2,6 +2,7 @@ package dev.arsignallocator
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.Uri
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -57,8 +58,10 @@ class TraceTransferTest {
         assertEquals(Intent.ACTION_SENDTO, intent.action)
         assertEquals("mailto", intent.data!!.scheme)
         assertEquals("support@publisher.invalid", intent.data!!.schemeSpecificPart.substringBefore('?'))
-        assertEquals("AR Device Finder support", intent.data!!.getQueryParameter("subject"))
-        assertEquals(supportBody(details), intent.data!!.getQueryParameter("body"))
+        assertEquals(
+            "subject=${Uri.encode("AR Device Finder support")}&body=${Uri.encode(supportBody(details))}",
+            intent.data!!.encodedSchemeSpecificPart.substringAfter('?'),
+        )
         assertArrayEquals(
             arrayOf("support@publisher.invalid"),
             intent.getStringArrayExtra(Intent.EXTRA_EMAIL),
