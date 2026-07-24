@@ -7,20 +7,31 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import dev.arsignallocator.ar.ArCorePoseSource
 import dev.arsignallocator.ble.AndroidBleScanner
 import dev.arsignallocator.core.ElapsedRealtimeClock
 import dev.arsignallocator.localization.LocalizationAdapter
+import dev.arsignallocator.monetization.AdsEligibility
+import dev.arsignallocator.monetization.AdsConsentController
+import dev.arsignallocator.monetization.BillingState
+import dev.arsignallocator.monetization.BillingEntitlementController
+import dev.arsignallocator.monetization.canInitializeAds
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
 import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.ui.SignalLocatorApp
 import java.io.File
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var pendingExport: File? = null
+    private lateinit var billing: BillingEntitlementController
+    private lateinit var consent: AdsConsentController
     private val exportLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/x-ndjson"),
     ) { uri ->
@@ -37,6 +48,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        consent = AdsConsentController(applicationContext, lifecycleScope)
+        consent.gatherConsent(this)
+        billing = BillingEntitlementController(applicationContext)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                billing.state.collect(::updateAdsEligibility)
+            }
+        }
+        billing.refresh()
         val traceDirectory = File(filesDir, "traces")
         val scanner = AndroidBleScanner(applicationContext)
         val viewModel = ViewModelProvider(
@@ -85,6 +105,29 @@ class MainActivity : ComponentActivity() {
 
     private fun showShellMessage(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::billing.isInitialized) billing.refresh()
+    }
+
+    override fun onDestroy() {
+        if (::billing.isInitialized) billing.close()
+        super.onDestroy()
+    }
+
+    private fun updateAdsEligibility(state: BillingState) {
+        val eligible = canInitializeAds(
+            AdsEligibility(
+                adsEnabled = BuildConfig.ADS_ENABLED,
+                isDebugBuild = BuildConfig.DEBUG,
+                debugTestAdsEnabled = BuildConfig.DEBUG_TEST_ADS_ENABLED,
+                entitlement = state.entitlement,
+                billingAuthoritative = state.isAuthoritative,
+            ),
+        )
+        consent.setEligible(eligible)
     }
 
     private fun exportTrace(file: File) {
