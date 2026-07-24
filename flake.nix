@@ -32,6 +32,7 @@
 
         androidWithEmulator = pkgs.androidenv.composeAndroidPackages
           (baseAndroidArgs // {
+            platformVersions = [ "37.0" ];
             includeEmulator = true;
             emulatorVersion = "latest";
             includeSystemImages = true;
@@ -44,12 +45,15 @@
             sdkRoot = "${composition.androidsdk}/libexec/android-sdk";
           in pkgs.mkShell {
             packages = [
+              pkgs.binutils
               pkgs.curl
               pkgs.git
               pkgs.jdk17_headless
               pkgs.jq
               pkgs.just
+              pkgs.openssl
               pkgs.python312
+              pkgs.unzip
               pkgs.uv
               composition.androidsdk
             ] ++ extraPackages;
@@ -68,6 +72,7 @@
           };
       in {
         devShells.default = mkAndroidShell android [ ];
+        devShells.ci = mkAndroidShell androidWithEmulator [ ];
         devShells.ide = mkAndroidShell androidWithEmulator [
           (pkgs.android-studio.withSdk androidWithEmulator.androidsdk)
         ];

@@ -154,6 +154,10 @@ val debugPlayLicenseKey = providers.gradleProperty("DEBUG_PLAY_LICENSE_KEY").orE
 val debugTestAdsEnabled = providers.gradleProperty("DEBUG_TEST_ADS_ENABLED")
     .map { it.toBooleanStrictOrNull() == true }
     .orElse(false)
+val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH")
+val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD")
 
 val publisherInputs = mapOf(
     "RELEASE_APPLICATION_ID" to releaseApplicationId,
@@ -361,6 +365,29 @@ tasks.register("testReleasePublisherValidation") {
     }
 }
 
+val validateReleaseSigning = tasks.register("validateReleaseSigning") {
+    group = "verification"
+    description = "Validates environment-backed release signing without tracking secrets."
+    doLast {
+        val signingInputs = listOf(
+            "ANDROID_KEYSTORE_PATH",
+            "ANDROID_KEYSTORE_PASSWORD",
+            "ANDROID_KEY_ALIAS",
+            "ANDROID_KEY_PASSWORD",
+        ).associateWith(System::getenv)
+        val missing = signingInputs.filterValues { it.isNullOrBlank() }.keys
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "Release builds require non-empty ${missing.joinToString()} environment variables.",
+            )
+        }
+        val keystore = File(signingInputs.getValue("ANDROID_KEYSTORE_PATH")!!)
+        if (!keystore.isFile || !keystore.canRead()) {
+            throw GradleException("ANDROID_KEYSTORE_PATH must be a readable file.")
+        }
+    }
+}
+
 validateReleasePublisherInputs.configure {
     dependsOn("testReleasePublisherValidation")
 }
@@ -377,6 +404,15 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = releaseKeystorePath.orNull?.let(::file)
+            storePassword = releaseKeystorePassword.orNull
+            keyAlias = releaseKeyAlias.orNull
+            keyPassword = releaseKeyPassword.orNull
+        }
     }
 
     buildTypes {
@@ -409,6 +445,7 @@ android {
             )
         }
         release {
+            signingConfig = signingConfigs.getByName("release")
             manifestPlaceholders["adMobApplicationId"] = releaseAdMobAppId.get()
             buildConfigField(
                 "String",
@@ -460,7 +497,7 @@ android {
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
-    dependsOn(validateReleasePublisherInputs)
+    dependsOn(validateReleasePublisherInputs, validateReleaseSigning)
 }
 
 dependencies {
