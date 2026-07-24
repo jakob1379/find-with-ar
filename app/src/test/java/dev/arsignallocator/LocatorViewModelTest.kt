@@ -23,8 +23,10 @@ import dev.arsignallocator.model.TargetHandle
 import dev.arsignallocator.monetization.EntitlementState
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
+import dev.arsignallocator.trace.TraceMode
 import dev.arsignallocator.trace.TraceOutcome
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
@@ -125,7 +127,10 @@ class LocatorViewModelTest {
             runCurrent()
             assertEquals(trace, viewModel.state.value.lastTraceFile)
             assertTrue(trace.exists())
-            assertTrue(viewModel.state.value.recoverableError!!.contains("Could not delete 1"))
+            assertEquals(
+                "Some sessions could not be deleted",
+                viewModel.state.value.recoverableError,
+            )
         } finally {
             Dispatchers.resetMain()
         }
@@ -245,7 +250,7 @@ class LocatorViewModelTest {
                 writerFactory = { file ->
                     if (interruptStart) {
                         interruptStart = false
-                        viewModel.stopAndReturnToDevices()
+                        viewModel.completeTrace(TraceOutcome.SKIPPED)
                     }
                     file.bufferedWriter()
                 },
@@ -275,7 +280,7 @@ class LocatorViewModelTest {
             )
             val payload = recorder.completedTraces().single().readText()
             assertTrue(payload.contains("\"session_id\":\"stale-start\""))
-            assertTrue(payload.contains("\"outcome\":\"INCOMPLETE\""))
+            assertTrue(payload.contains("\"outcome\":\"SKIPPED\""))
         } finally {
             Dispatchers.resetMain()
         }
@@ -316,11 +321,14 @@ class LocatorViewModelTest {
             viewModel.selectDevice(target.key)
             runCurrent()
 
-            viewModel.stopAndReturnToDevices()
+            viewModel.completeTrace(TraceOutcome.SKIPPED)
             runCurrent()
 
             assertEquals(AppScreen.DEVICES, viewModel.state.value.screen)
-            assertTrue(viewModel.state.value.recoverableError!!.contains("Could not finalize"))
+            assertEquals(
+                "The session could not be saved",
+                viewModel.state.value.recoverableError,
+            )
             assertTrue(
                 temporaryFolder.root.listFiles().orEmpty()
                     .any { it.name.endsWith(".active.ndjson") },
@@ -552,6 +560,11 @@ class LocatorViewModelTest {
                     assertTrue(payload.contains("\"outcome\":\"INCOMPLETE\""))
                     assertTrue(payload.contains("\"path_length_m\":1.5"))
                     assertEquals(
+                        viewModel.state.value.lastTraceFile,
+                        viewModel.traceSummaries.value.single().file,
+                    )
+                    assertNull(viewModel.historyError.value)
+                    assertEquals(
                         1,
                         if (completeScan) {
                             scanner.completeScanCancellations
@@ -612,6 +625,38 @@ class LocatorViewModelTest {
     }
 
     @Test
+    fun `history publishes newest ten and refreshes after delete`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            var session = 0
+            val recorder = TraceRecorder(
+                traceDirectory = temporaryFolder.root,
+                wallClockMillis = { session.toLong() },
+                monotonicClockNanos = { session.toLong() },
+                sessionIdFactory = { "history-${++session}" },
+            )
+            repeat(11) {
+                recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+                recorder.finish(TraceOutcome.SKIPPED)
+            }
+            val viewModel = viewModel(recorder, dispatcher)
+            runCurrent()
+
+            assertEquals(10, viewModel.traceSummaries.value.size)
+            assertTrue(viewModel.traceSummaries.value.first().file.name.endsWith("-history-11.ndjson"))
+
+            viewModel.deleteTrace(viewModel.traceSummaries.value.first().file)
+            runCurrent()
+
+            assertEquals(9, viewModel.traceSummaries.value.size)
+            assertNull(viewModel.historyError.value)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `Complete Scan runtime failure preserves path and hides exception text`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
@@ -662,6 +707,51 @@ class LocatorViewModelTest {
             Dispatchers.resetMain()
         }
     }
+
+    @Test
+    fun `failed history deletion keeps item visible with stable error`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            var failDelete = false
+            val recorder = TraceRecorder(
+                traceDirectory = temporaryFolder.root,
+                wallClockMillis = { 0L },
+                monotonicClockNanos = { 0L },
+                sessionIdFactory = { "delete-failure" },
+                deleteFile = { file -> !failDelete && file.delete() },
+            )
+            recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+            recorder.finish(TraceOutcome.SKIPPED)
+            failDelete = true
+            val viewModel = viewModel(recorder, dispatcher)
+            runCurrent()
+            val file = viewModel.traceSummaries.value.single().file
+
+            viewModel.deleteTrace(file)
+            runCurrent()
+
+            assertEquals(file, viewModel.traceSummaries.value.single().file)
+            assertEquals("The session could not be deleted", viewModel.historyError.value)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    private fun viewModel(
+        recorder: TraceRecorder,
+        dispatcher: CoroutineDispatcher,
+    ) = LocatorViewModel(
+        scanner = FakeScanner(packet(target("history"), at = 0L, rssi = -65)),
+        locationEngine = FakeLocationEngine(),
+        synchronizer = SampleSynchronizer(),
+        traceRecorder = recorder,
+        clock = FakeClock(0L),
+        appVersion = "test",
+        deviceModel = "fake",
+        computationDispatcher = dispatcher,
+        ioDispatcher = dispatcher,
+    )
 
     private class FakeClock(var value: Long) : MonotonicClock {
         override fun nowNanos(): Long = value

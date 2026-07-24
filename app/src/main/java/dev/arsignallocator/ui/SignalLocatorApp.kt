@@ -74,6 +74,8 @@ import dev.arsignallocator.model.DeviceKey
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.permissions.PermissionPolicy
+import dev.arsignallocator.trace.TraceOutcome
+import dev.arsignallocator.trace.TraceSummary
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlin.math.PI
@@ -89,20 +91,19 @@ fun SignalLocatorApp(
     viewModel: LocatorViewModel,
     arPoseSource: ArCorePoseSource,
     onExport: (File) -> Unit,
-    onLeaveTracking: () -> Unit,
-    onFoundTarget: () -> Unit,
+    onShare: (File) -> Unit,
+    onSendSupport: (TraceSummary?, File?) -> Unit,
     onCompleteScanPurchase: () -> Unit = {},
     onPro: () -> Unit = {},
-    onDataHistory: () -> Unit = {},
     onPrivacyChoices: () -> Unit = {},
-    onContactSupport: () -> Unit = {},
-    onNotices: () -> Unit = {},
     trackingBannerVisible: Boolean = false,
     trackingBanner: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val traceSummaries by viewModel.traceSummaries.collectAsStateWithLifecycle()
+    val historyError by viewModel.historyError.collectAsStateWithLifecycle()
     val preferences = remember(context) {
         context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     }
@@ -110,6 +111,15 @@ fun SignalLocatorApp(
         mutableStateOf(preferences.getBoolean(ONBOARDING_COMPLETE, false))
     }
     var devicePage by remember { mutableStateOf(DevicePage.PICKER) }
+    var exitSurveyQuestion by remember { mutableStateOf<String?>(null) }
+    val onTrackingExit: (TrackingExit) -> Unit = { exit ->
+        val outcome = trackingExitOutcome(exit)
+        if (outcome == null) {
+            exitSurveyQuestion = surveyQuestionFor(state.screen)
+        } else {
+            viewModel.completeTrace(outcome)
+        }
+    }
     var permissionRefresh by remember { mutableIntStateOf(0) }
     var permissionWasRequested by remember {
         mutableStateOf(preferences.getBoolean(PERMISSIONS_REQUESTED, false))
@@ -158,12 +168,15 @@ fun SignalLocatorApp(
     LaunchedEffect(runtimeReady) { viewModel.setRuntimeReady(runtimeReady) }
     LaunchedEffect(state.screen, runtimeReady) {
         arPoseSource.setActive(runtimeReady && state.screen != AppScreen.DEVICES)
+        if (state.screen == AppScreen.DEVICES) exitSurveyQuestion = null
     }
     BackHandler(enabled = state.screen == AppScreen.DEVICES && devicePage != DevicePage.PICKER) {
         devicePage = when (devicePage) {
             DevicePage.PICKER -> DevicePage.PICKER
             DevicePage.SETTINGS -> DevicePage.PICKER
-            DevicePage.HELP, DevicePage.ABOUT -> DevicePage.SETTINGS
+            DevicePage.DATA, DevicePage.HELP, DevicePage.SUPPORT, DevicePage.ABOUT ->
+                DevicePage.SETTINGS
+            DevicePage.NOTICES -> DevicePage.ABOUT
         }
     }
 
@@ -210,36 +223,52 @@ fun SignalLocatorApp(
                         }
                     },
                     onSettings = { devicePage = DevicePage.SETTINGS },
-                    onExport = onExport,
-                    onDelete = viewModel::deleteLocalTraces,
                 )
                 DevicePage.SETTINGS -> SettingsScreen(
                     onBack = { devicePage = DevicePage.PICKER },
                     onPro = onPro,
-                    onDataHistory = onDataHistory,
+                    onDataHistory = { devicePage = DevicePage.DATA },
                     onPrivacyChoices = onPrivacyChoices,
                     onHelp = { devicePage = DevicePage.HELP },
-                    onContactSupport = onContactSupport,
+                    onContactSupport = { devicePage = DevicePage.SUPPORT },
                     onAbout = { devicePage = DevicePage.ABOUT },
                 )
+                DevicePage.DATA -> DataHistoryScreen(
+                    summaries = traceSummaries,
+                    error = historyError,
+                    onBack = { devicePage = DevicePage.SETTINGS },
+                    onExport = onExport,
+                    onShare = onShare,
+                    onDelete = viewModel::deleteTrace,
+                    onDeleteAll = viewModel::deleteLocalTraces,
+                )
                 DevicePage.HELP -> HelpScreen(onBack = { devicePage = DevicePage.SETTINGS })
+                DevicePage.SUPPORT -> ContactSupportScreen(
+                    supportEmail = BuildConfig.SUPPORT_EMAIL,
+                    summaries = traceSummaries,
+                    onBack = { devicePage = DevicePage.SETTINGS },
+                    onSend = onSendSupport,
+                )
                 DevicePage.ABOUT -> AboutScreen(
                     appVersion = BuildConfig.VERSION_NAME,
                     onBack = { devicePage = DevicePage.SETTINGS },
-                    onNotices = onNotices,
+                    onNotices = { devicePage = DevicePage.NOTICES },
                 )
+                DevicePage.NOTICES -> NoticesScreen(onBack = { devicePage = DevicePage.ABOUT })
             }
             state.screen == AppScreen.COMPLETE_SCAN -> CompleteScanScreen(
                 state = state,
                 arPoseSource = arPoseSource,
                 onFocus = viewModel::focusCompleteScanDevice,
-                onFinishScan = onLeaveTracking,
+                onFinishScan = {
+                    exitSurveyQuestion = surveyQuestionFor(AppScreen.COMPLETE_SCAN)
+                },
             )
             else -> TrackingScreen(
                 state = state,
                 arPoseSource = arPoseSource,
-                onLeaveSession = onLeaveTracking,
-                onFoundTarget = onFoundTarget,
+                onLeaveSession = { onTrackingExit(TrackingExit.DEVICES) },
+                onFoundTarget = { onTrackingExit(TrackingExit.FOUND_TARGET) },
                 onToggleVariantPanel = {
                     if (state.screen == AppScreen.DEBUG) viewModel.showTracking() else viewModel.showDebug()
                 },
@@ -249,7 +278,30 @@ fun SignalLocatorApp(
                 bannerContent = trackingBanner,
             )
         }
+        exitSurveyQuestion?.let { question ->
+            EndSessionSurvey(
+                question = question,
+                onSubmit = { answer ->
+                    exitSurveyQuestion = null
+                    viewModel.completeTrace(answer.outcome, answer.reason, answer.note)
+                },
+                onDismiss = { exitSurveyQuestion = null },
+            )
+        }
     }
+}
+
+internal enum class TrackingExit { FOUND_TARGET, DEVICES }
+
+internal fun trackingExitOutcome(exit: TrackingExit): TraceOutcome? = when (exit) {
+    TrackingExit.FOUND_TARGET -> TraceOutcome.YES
+    TrackingExit.DEVICES -> null
+}
+
+internal fun surveyQuestionFor(screen: AppScreen): String? = when (screen) {
+    AppScreen.TRACKING, AppScreen.DEBUG -> SINGLE_TARGET_SURVEY_QUESTION
+    AppScreen.COMPLETE_SCAN -> COMPLETE_SCAN_SURVEY_QUESTION
+    AppScreen.DEVICES -> null
 }
 
 private enum class BluetoothUiState { ENABLED, DISABLED, UNSUPPORTED, PERMISSION_MISSING }

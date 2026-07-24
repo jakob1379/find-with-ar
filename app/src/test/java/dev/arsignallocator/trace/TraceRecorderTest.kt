@@ -222,6 +222,52 @@ class TraceRecorderTest {
     }
 
     @Test
+    fun `persists every survey answer and reason with Unicode code-point limit`() {
+        TraceOutcome.entries.filterNot { it == TraceOutcome.INCOMPLETE }.forEachIndexed {
+                index,
+                outcome,
+            ->
+            val directory = temporaryFolder.newFolder("answer-$index")
+            val recorder = TraceRecorder(
+                traceDirectory = directory,
+                wallClockMillis = { 0L },
+                monotonicClockNanos = { 0L },
+                sessionIdFactory = { "answer-$index" },
+            )
+            recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+            val payload = recorder.finish(outcome).file!!.readText()
+            assertTrue(payload.contains("\"outcome\":\"${outcome.wireValue}\""))
+        }
+        TraceOutcomeReason.entries.forEachIndexed { index, reason ->
+            val directory = temporaryFolder.newFolder("reason-$index")
+            val recorder = TraceRecorder(
+                traceDirectory = directory,
+                wallClockMillis = { 0L },
+                monotonicClockNanos = { 0L },
+                sessionIdFactory = { "reason-$index" },
+            )
+            recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+            val payload = recorder.finish(
+                if (index % 2 == 0) TraceOutcome.NO else TraceOutcome.NOT_SURE,
+                reason,
+                "😀".repeat(500),
+            ).file!!.readText()
+            assertTrue(payload.contains("\"reason\":\"${reason.wireValue}\""))
+            assertTrue(payload.contains("😀".repeat(500)))
+        }
+        val recorder = TraceRecorder(
+            traceDirectory = temporaryFolder.newFolder("too-long"),
+            wallClockMillis = { 0L },
+            monotonicClockNanos = { 0L },
+            sessionIdFactory = { "too-long" },
+        )
+        recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+        assertThrows(IllegalArgumentException::class.java) {
+            recorder.finish(TraceOutcome.NO, note = "😀".repeat(501))
+        }
+    }
+
+    @Test
     fun `history enumeration leaves live trace active and writable`() {
         val times = ArrayDeque(listOf(0L, 1_000L))
         val recorder = TraceRecorder(

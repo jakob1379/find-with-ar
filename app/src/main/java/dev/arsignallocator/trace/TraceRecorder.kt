@@ -109,7 +109,7 @@ private data class RecoverySummary(
     val hasOutcome: Boolean,
 )
 
-private data class RecoverySession(
+internal data class RecoverySession(
     val sessionId: String,
     val createdAtMillis: Long,
     val startedAtMonotonicNanos: Long?,
@@ -118,13 +118,13 @@ private data class RecoverySession(
     val selectedState: DeviceState?,
 )
 
-private data class RecoveryObservation(
+internal data class RecoveryObservation(
     val state: DeviceState,
     val sequence: Long,
     val appMonotonicNanos: Long,
 )
 
-private data class RecoveryEvent(
+internal data class RecoveryEvent(
     val key: DeviceKey?,
     val transport: BluetoothTransport?,
 )
@@ -892,7 +892,7 @@ class TraceRecorder(
             .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 0xff) }
 }
 
-private object TraceV2Validator {
+internal object TraceV2Validator {
     private val eventCodes = TraceEventCode.entries.map(TraceEventCode::wireValue).toSet()
     private val outcomes = TraceOutcome.entries.map(TraceOutcome::wireValue).toSet()
     private val reasons = TraceOutcomeReason.entries.map(TraceOutcomeReason::wireValue).toSet()
@@ -943,6 +943,8 @@ private object TraceV2Validator {
             requireSigned64Integers(it)
         }
     }
+
+    fun parseUtcMillis(value: String): Long = parseUtc(value)
 
     fun session(record: JsonObject): RecoverySession {
         requireRecord(record, "session")
