@@ -122,7 +122,7 @@ def simulate_trace(
             advertisement={"synthetic_outlier": bool(outlier_mask[index])},
             pose_association_age_ns=0,
             filtered_rssi_dbm=float(value),
-            rssi_variance_db2=max(config.noise_scale_db**2, np.finfo(np.float64).eps),
+            rssi_variance_db2=max(config.noise_scale_db**2, float(np.finfo(np.float64).eps)),
             device_key="D01",
             transport="low_energy",
         )
