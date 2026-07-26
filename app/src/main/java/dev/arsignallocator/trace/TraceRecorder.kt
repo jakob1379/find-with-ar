@@ -43,7 +43,7 @@ private val BOOT_DIGEST_PATTERN = Regex("[0-9a-f]{64}")
 private val INTEGER_PATTERN = Regex("-?(?:0|[1-9][0-9]*)")
 private val COMPLETED_GENERATION_PATTERN =
     Regex("""^signal-trace-g([0-9]{20})-.+\.ndjson$""")
-private val PROCESS_BOOT_ID = runCatching {
+private fun readProcessBootId(): String = runCatching {
     File("/proc/sys/kernel/random/boot_id").readText().trim().takeIf(String::isNotBlank)
 }.getOrNull() ?: UUID.randomUUID().toString()
 
@@ -139,7 +139,7 @@ class TraceRecorder internal constructor(
     private val wallClockMillis: () -> Long = System::currentTimeMillis,
     private val monotonicClockNanos: () -> Long = System::nanoTime,
     private val sessionIdFactory: () -> String = { UUID.randomUUID().toString() },
-    private val bootIdProvider: () -> String = { PROCESS_BOOT_ID },
+    private val bootIdProvider: () -> String = ::readProcessBootId,
     private val deleteFile: (File) -> Boolean = { it.delete() },
     private val renameFile: (File, File) -> Boolean = File::renameTo,
     private val writerFactory: (File) -> BufferedWriter = File::bufferedWriter,

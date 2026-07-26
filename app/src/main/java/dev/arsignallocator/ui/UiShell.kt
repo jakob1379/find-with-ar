@@ -66,8 +66,6 @@ import kotlinx.coroutines.launch
 
 internal enum class DevicePage { PICKER, SETTINGS, DATA, HELP, SUPPORT, ABOUT, NOTICES }
 
-internal const val COMPLETE_SCAN_ENABLED = false
-
 internal data class DeviceCandidateGroups(
     val named: List<DeviceCandidate>,
     val unnamed: List<DeviceCandidate>,
@@ -338,21 +336,19 @@ internal fun DevicePickerScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (COMPLETE_SCAN_ENABLED) {
-                item {
-                    Button(onClick = onCompleteScan, modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+            item {
+                Button(onClick = onCompleteScan, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Complete Scan")
+                        Surface(
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            contentColor = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(8.dp),
                         ) {
-                            Text("Complete Scan")
-                            Surface(
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                contentColor = MaterialTheme.colorScheme.primary,
-                                shape = RoundedCornerShape(8.dp),
-                            ) {
-                                Text("Pro", Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
-                            }
+                            Text("Pro", Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
                         }
                     }
                 }

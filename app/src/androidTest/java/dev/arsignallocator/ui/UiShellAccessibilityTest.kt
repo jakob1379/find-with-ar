@@ -87,12 +87,14 @@ class UiShellAccessibilityTest {
     fun pickerKeepsLabelsFocusOrderClickSemanticsAndTouchTargets() {
         setContent(size = DpSize(320.dp, 800.dp)) { Picker() }
 
+        val completeScan = compose.onNode(hasText("Complete Scan") and hasClickAction())
         val scanAgain = compose.onNode(hasText("Scan again") and hasClickAction())
         val settings = compose.onNode(hasText("Settings") and hasClickAction())
         val search = compose.onNode(hasSetTextAction())
         val firstDevice = compose.onNode(hasText("First beacon") and hasClickAction())
         val lastDevice = compose.onNode(hasText("Last beacon") and hasClickAction())
         val expected = listOf(
+            completeScan,
             scanAgain,
             settings,
             search,
@@ -105,15 +107,10 @@ class UiShellAccessibilityTest {
             .filter { it in expected }
 
         assertEquals(expected, actual)
-        listOf(scanAgain, settings, firstDevice, lastDevice).forEach {
+        listOf(completeScan, scanAgain, settings, firstDevice, lastDevice).forEach {
             it.assert(hasClickAction()).assertMinimumTouchTarget()
         }
         search.assert(hasSetTextAction()).assertMinimumTouchTarget()
-        assertTrue(
-            compose.onAllNodes(hasText("Complete Scan"), useUnmergedTree = true)
-                .fetchSemanticsNodes()
-                .isEmpty(),
-        )
     }
 
     private fun setContent(
