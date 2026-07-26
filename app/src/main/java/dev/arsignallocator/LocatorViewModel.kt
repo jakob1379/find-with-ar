@@ -9,15 +9,13 @@ import dev.arsignallocator.ble.ScanPacket
 import dev.arsignallocator.core.MonotonicClock
 import dev.arsignallocator.localization.LocationEngine
 import dev.arsignallocator.localization.LocalizationAdapter
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.model.AppScreen
 import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.CompleteScanDevice
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.DeviceKey
-import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
-import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_MULTIMODAL
-import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_UNIMODAL
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.model.PoseObservation
@@ -603,8 +601,8 @@ class LocatorViewModel internal constructor(
             return "Signal found. Move sideways to measure from another position"
         }
         return when (state.estimate?.status) {
-            ESTIMATE_STATUS_GRID_MULTIMODAL -> "Several areas still fit. Walk around the other side"
-            ESTIMATE_STATUS_GRID_UNIMODAL, ESTIMATE_STATUS_EKF -> {
+            EstimateState.GRID_MULTIMODAL -> "Several areas still fit. Walk around the other side"
+            EstimateState.GRID_UNIMODAL, EstimateState.EKF -> {
                 val area = state.estimate.regionAreaSquareMetres
                 if (state.estimate.meanXMetres == null || area == null) {
                     "Collecting a more reliable location region"

@@ -556,7 +556,7 @@ class BillingEntitlementControllerTest {
     )
 
     companion object {
-        private fun product() = StoreProduct("€4.99", Any())
+        private fun product() = StoreProduct("€4.99")
 
         private fun purchase(
             state: Int = Purchase.PurchaseState.PURCHASED,

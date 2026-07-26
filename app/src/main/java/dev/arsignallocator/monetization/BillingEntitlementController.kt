@@ -52,7 +52,7 @@ internal data class StorePurchase(
 
 internal data class StoreProduct(
     val formattedPrice: String,
-    val platformDetails: Any,
+    val platformDetails: PlayProduct? = null,
 )
 
 internal interface BillingSdk {
@@ -76,7 +76,7 @@ internal interface BillingSdk {
     fun close()
 }
 
-private data class PlayProduct(
+internal data class PlayProduct(
     val details: ProductDetails,
     val offerToken: String?,
 )
@@ -158,7 +158,7 @@ private class PlayBillingSdk(context: Context) : BillingSdk {
         activity: Activity,
         product: StoreProduct,
     ): StoreBillingResult {
-        val playProduct = product.platformDetails as PlayProduct
+        val playProduct = checkNotNull(product.platformDetails)
         val productParams = BillingFlowParams.ProductDetailsParams.newBuilder()
             .setProductDetails(playProduct.details)
             .apply {

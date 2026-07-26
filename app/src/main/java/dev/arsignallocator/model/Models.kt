@@ -1,5 +1,6 @@
 package dev.arsignallocator.model
 
+import dev.arsignallocator.localization.EstimateState
 import java.io.File
 
 @JvmInline
@@ -73,7 +74,7 @@ data class SynchronizedObservation(
 )
 
 data class EstimateUiModel(
-    val status: String,
+    val status: EstimateState,
     val meanXMetres: Double?,
     val meanZMetres: Double?,
     val covarianceXX: Double?,
@@ -96,18 +97,12 @@ fun EstimateUiModel.hasVisibleRegion(): Boolean {
 }
 
 fun EstimateUiModel.isLocalized(): Boolean =
-    status in POINT_ESTIMATE_STATUSES &&
+    (status == EstimateState.GRID_UNIMODAL || status == EstimateState.EKF) &&
         meanXMetres.isFiniteValue() &&
         meanZMetres.isFiniteValue() &&
         hasVisibleRegion() &&
         regionAreaSquareMetres.isPositiveFinite() &&
         (ambiguity == null || ambiguity <= MAX_POINT_AMBIGUITY)
-
-const val ESTIMATE_STATUS_COLLECTING = "COLLECTING"
-const val ESTIMATE_STATUS_GRID_MULTIMODAL = "GRID_MULTIMODAL"
-const val ESTIMATE_STATUS_GRID_UNIMODAL = "GRID_UNIMODAL"
-const val ESTIMATE_STATUS_EKF = "EKF"
-val POINT_ESTIMATE_STATUSES = setOf(ESTIMATE_STATUS_GRID_UNIMODAL, ESTIMATE_STATUS_EKF)
 
 data class ProbabilityCell(
     val xMetres: Double,

@@ -51,7 +51,7 @@ class LocalizationAdapter(
         val region = hpd90
         val covariance = covarianceXZ.takeIf { region == null }
         return EstimateUiModel(
-            status = state.name,
+            status = state,
             meanXMetres = meanXZ?.x,
             meanZMetres = meanXZ?.z,
             covarianceXX = covariance?.m00,

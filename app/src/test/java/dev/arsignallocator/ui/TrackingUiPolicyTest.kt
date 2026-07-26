@@ -1,13 +1,11 @@
 package dev.arsignallocator.ui
 
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.ArStatus
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.DeviceKey
-import dev.arsignallocator.model.ESTIMATE_STATUS_COLLECTING
-import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
-import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_MULTIMODAL
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.model.ProbabilityCell
@@ -26,22 +24,22 @@ class TrackingUiPolicyTest {
         assertEquals(EstimateVisualization.HIDDEN, selectEstimateVisualization(null))
         assertEquals(
             EstimateVisualization.REGION,
-            selectEstimateVisualization(estimate(status = ESTIMATE_STATUS_COLLECTING, mean = false)),
+            selectEstimateVisualization(estimate(status = EstimateState.COLLECTING, mean = false)),
         )
         assertEquals(
             EstimateVisualization.REGION,
             selectEstimateVisualization(
-                estimate(status = ESTIMATE_STATUS_GRID_MULTIMODAL, mean = true),
+                estimate(status = EstimateState.GRID_MULTIMODAL, mean = true),
             ),
         )
         assertEquals(
             EstimateVisualization.POINT,
-            selectEstimateVisualization(estimate(status = ESTIMATE_STATUS_EKF, mean = true)),
+            selectEstimateVisualization(estimate(status = EstimateState.EKF, mean = true)),
         )
         assertEquals(
             EstimateVisualization.HIDDEN,
             selectEstimateVisualization(
-                estimate(status = ESTIMATE_STATUS_EKF, mean = true).copy(
+                estimate(status = EstimateState.EKF, mean = true).copy(
                     probabilityCells = emptyList(),
                     regionAreaSquareMetres = null,
                 ),
@@ -65,7 +63,7 @@ class TrackingUiPolicyTest {
             policy(
                 tracking.copy(
                     estimate = estimate(
-                        status = ESTIMATE_STATUS_GRID_MULTIMODAL,
+                        status = EstimateState.GRID_MULTIMODAL,
                         mean = false,
                         ambiguity = 0.6,
                     ),
@@ -77,7 +75,7 @@ class TrackingUiPolicyTest {
             PublicTrackingState.NARROWING,
             policy(
                 tracking.copy(
-                    estimate = estimate(status = ESTIMATE_STATUS_COLLECTING, mean = false),
+                    estimate = estimate(status = EstimateState.COLLECTING, mean = false),
                 ),
                 nowElapsedNanos = 1L,
             ).publicState,
@@ -90,8 +88,8 @@ class TrackingUiPolicyTest {
 
     @Test
     fun `frozen estimate neither shrinks nor refreshes`() {
-        val stable = estimate(status = ESTIMATE_STATUS_EKF, mean = true)
-        val incoming = estimate(status = ESTIMATE_STATUS_COLLECTING, mean = false)
+        val stable = estimate(status = EstimateState.EKF, mean = true)
+        val incoming = estimate(status = EstimateState.COLLECTING, mean = false)
 
         assertSame(stable, visibleEstimate(stable, incoming, frozen = true))
         assertSame(incoming, visibleEstimate(stable, incoming, frozen = false))
@@ -100,9 +98,9 @@ class TrackingUiPolicyTest {
 
     @Test
     fun `rapid loss transition freezes its simultaneous broader estimate`() {
-        val likelyArea = estimate(status = ESTIMATE_STATUS_EKF, mean = true)
-        val broaderArea = estimate(status = ESTIMATE_STATUS_COLLECTING, mean = false)
-        val laterEstimate = estimate(status = ESTIMATE_STATUS_GRID_MULTIMODAL, mean = false)
+        val likelyArea = estimate(status = EstimateState.EKF, mean = true)
+        val broaderArea = estimate(status = EstimateState.COLLECTING, mean = false)
+        val laterEstimate = estimate(status = EstimateState.GRID_MULTIMODAL, mean = false)
         val remembered = RememberedEstimate(likelyArea)
 
         assertSame(likelyArea, remembered.update(likelyArea, freeze = false))
@@ -283,7 +281,7 @@ class TrackingUiPolicyTest {
     }
 
     private fun estimate(
-        status: String,
+        status: EstimateState,
         mean: Boolean,
         ambiguity: Double = 0.1,
     ): EstimateUiModel = EstimateUiModel(
@@ -315,7 +313,7 @@ class TrackingUiPolicyTest {
         return LocatorUiState(
             selected = DeviceCandidate(handle, -60, -60.0, 1.0, 0L),
             arStatus = ArStatus(arStatus),
-            estimate = estimate(status = ESTIMATE_STATUS_EKF, mean = true),
+            estimate = estimate(status = EstimateState.EKF, mean = true),
             metrics = TrackingMetrics(
                 acceptedCount = 5,
                 lastSeenElapsedNanos = packetLastSeen,

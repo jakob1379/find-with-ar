@@ -6,6 +6,7 @@ import dev.arsignallocator.ble.BleAvailability
 import dev.arsignallocator.ble.BleScanner
 import dev.arsignallocator.ble.ScanPacket
 import dev.arsignallocator.core.MonotonicClock
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.localization.LocationEngine
 import dev.arsignallocator.model.AppScreen
 import dev.arsignallocator.model.ArRuntimeStatus
@@ -13,8 +14,6 @@ import dev.arsignallocator.model.ArStatus
 import dev.arsignallocator.model.BleObservation
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceKey
-import dev.arsignallocator.model.ESTIMATE_STATUS_COLLECTING
-import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
@@ -207,8 +206,8 @@ class LocatorViewModelTest {
                 listOf(
                     "ar_state" to "TRACKING",
                     "scanner_state" to "SINGLE_TARGET_ACTIVE",
-                    "estimator_state_changed" to ESTIMATE_STATUS_COLLECTING,
-                    "estimator_state_changed" to ESTIMATE_STATUS_EKF,
+                    "estimator_state_changed" to EstimateState.COLLECTING.name,
+                    "estimator_state_changed" to EstimateState.EKF.name,
                     "signal_lost" to null,
                     "signal_recovered" to null,
                     "ar_state" to "ERROR",
@@ -224,7 +223,7 @@ class LocatorViewModelTest {
                 lines.indexOfFirst { it.contains("\"sequence\":0") } <
                     lines.indexOfFirst {
                         it.contains("\"code\":\"estimator_state_changed\"") &&
-                            it.contains(ESTIMATE_STATUS_COLLECTING)
+                            it.contains(EstimateState.COLLECTING.name)
                     },
             )
             assertTrue(
@@ -1220,7 +1219,7 @@ class LocatorViewModelTest {
 
     private companion object {
         fun collectingEstimate() = EstimateUiModel(
-            status = ESTIMATE_STATUS_COLLECTING,
+            status = EstimateState.COLLECTING,
             meanXMetres = null,
             meanZMetres = null,
             covarianceXX = null,
@@ -1232,7 +1231,7 @@ class LocatorViewModelTest {
         )
 
         fun localizedEstimate() = EstimateUiModel(
-            status = ESTIMATE_STATUS_EKF,
+            status = EstimateState.EKF,
             meanXMetres = 2.0,
             meanZMetres = 3.0,
             covarianceXX = 1.0,

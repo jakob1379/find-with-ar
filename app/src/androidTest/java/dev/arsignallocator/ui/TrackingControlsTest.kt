@@ -32,13 +32,12 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.ArStatus
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.DeviceKey
-import dev.arsignallocator.model.ESTIMATE_STATUS_COLLECTING
-import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.model.ProbabilityCell
@@ -241,7 +240,7 @@ class TrackingControlsTest {
         return LocatorUiState(
             selected = DeviceCandidate(handle, -60, -60.0, 1.0, 0L),
             arStatus = ArStatus(arStatus),
-            estimate = estimate(ESTIMATE_STATUS_EKF),
+            estimate = estimate(EstimateState.EKF),
             metrics = TrackingMetrics(
                 rollingMedianRssiDbm = -60.0,
                 acceptedCount = 5,
@@ -251,7 +250,7 @@ class TrackingControlsTest {
         )
     }
 
-    private fun estimate(status: String) = EstimateUiModel(
+    private fun estimate(status: EstimateState) = EstimateUiModel(
         status = status,
         meanXMetres = 1.0,
         meanZMetres = 2.0,

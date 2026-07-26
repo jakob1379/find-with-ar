@@ -3,13 +3,10 @@ package dev.arsignallocator.trace
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.arsignallocator.core.MonotonicClock
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceKey
-import dev.arsignallocator.model.ESTIMATE_STATUS_COLLECTING
-import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
-import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_MULTIMODAL
-import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_UNIMODAL
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.SynchronizedObservation
 import dev.arsignallocator.model.TargetHandle
@@ -46,7 +43,7 @@ internal class TraceStore(
     private var tracedArState: ArRuntimeStatus? = null
     private var tracedScannerState: String? = null
     private val tracedEstimatorStates =
-        mutableMapOf<Pair<DeviceKey, BluetoothTransport>, String>()
+        mutableMapOf<Pair<DeviceKey, BluetoothTransport>, EstimateState?>()
     private val tracedLostSignals =
         mutableSetOf<Pair<DeviceKey, BluetoothTransport>>()
 
@@ -257,17 +254,14 @@ internal class TraceStore(
     }
 
     private fun recordEstimatorState(target: TargetHandle, estimate: EstimateUiModel?) {
-        val state = when (estimate?.status) {
-            ESTIMATE_STATUS_COLLECTING,
-            ESTIMATE_STATUS_GRID_MULTIMODAL,
-            ESTIMATE_STATUS_GRID_UNIMODAL,
-            ESTIMATE_STATUS_EKF,
-            -> estimate.status
-            else -> ESTIMATOR_STATE_INSUFFICIENT_EVIDENCE
-        }
+        val state = estimate?.status
         val identity = target.key to target.transport
-        if (tracedEstimatorStates[identity] == state) return
-        recordDeviceEvent(TraceEventCode.ESTIMATOR_STATE_CHANGED, target, state)
+        if (identity in tracedEstimatorStates && tracedEstimatorStates[identity] == state) return
+        recordDeviceEvent(
+            TraceEventCode.ESTIMATOR_STATE_CHANGED,
+            target,
+            state?.name ?: ESTIMATOR_STATE_INSUFFICIENT_EVIDENCE,
+        )
         tracedEstimatorStates[identity] = state
     }
 

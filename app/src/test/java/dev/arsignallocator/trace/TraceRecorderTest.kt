@@ -2,6 +2,7 @@ package dev.arsignallocator.trace
 
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.model.BleObservation
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceKey
@@ -174,10 +175,6 @@ class TraceRecorderTest {
                 recorder.record(observation, null)
             }
         }
-        assertThrows(IllegalArgumentException::class.java) {
-            recorder.record(valid, localizedEstimate("UNKNOWN"))
-        }
-
         recorder.record(valid, null)
         val payload = recorder.finish(TraceOutcome.INCOMPLETE).file!!.readText()
         assertEquals(1, "\"record_type\":\"observation\"".toRegex().findAll(payload).count())
@@ -319,12 +316,18 @@ class TraceRecorderTest {
             sessionIdFactory = { "observed" },
         )
         recorder.startCompleteScan("1.0.0", "Test phone")
-        recorder.record(sample("source-a", null, 1_000_000_000L), localizedEstimate("GRID_MULTIMODAL"))
+        recorder.record(
+            sample("source-a", null, 1_000_000_000L),
+            localizedEstimate(EstimateState.GRID_MULTIMODAL),
+        )
         recorder.record(
             sample("source-b", null, 2_000_000_000L, BluetoothTransport.CLASSIC),
             null,
         )
-        recorder.record(sample("source-a", null, 3_500_000_000L), localizedEstimate("EKF"))
+        recorder.record(
+            sample("source-a", null, 3_500_000_000L),
+            localizedEstimate(EstimateState.EKF),
+        )
         recorder.close()
 
         val recovered = TraceRecorder(
@@ -361,7 +364,7 @@ class TraceRecorderTest {
         recorder.startCompleteScan("1.0.0", "Test phone")
         recorder.record(
             sample("source-a", null, 100L),
-            localizedEstimate("GRID_MULTIMODAL"),
+            localizedEstimate(EstimateState.GRID_MULTIMODAL),
         )
 
         val outcome = recorder.finish(TraceOutcome.INCOMPLETE).file!!.readLines().last()
@@ -381,7 +384,7 @@ class TraceRecorderTest {
             startCompleteScan("1.0.0", "Test phone")
             record(
                 sample("source-a", null, 100L),
-                localizedEstimate("GRID_MULTIMODAL"),
+                localizedEstimate(EstimateState.GRID_MULTIMODAL),
             )
             close()
         }
@@ -848,7 +851,7 @@ class TraceRecorderTest {
                 rssiDbm = -58,
                 filteredRssiDbm = -59.0,
             ),
-            localizedEstimate("GRID_UNIMODAL"),
+            localizedEstimate(EstimateState.GRID_UNIMODAL),
         )
 
         val completed = recorder.finish(
@@ -904,7 +907,10 @@ class TraceRecorderTest {
         recorder.startCompleteScan("1.0.0", "Test phone")
 
         assertThrows(IOException::class.java) {
-            recorder.record(sample("failed-observation", null, 100L), localizedEstimate("EKF"))
+            recorder.record(
+                sample("failed-observation", null, 100L),
+                localizedEstimate(EstimateState.EKF),
+            )
         }
         recorder.record(sample("recorded-observation", null, 110L), null)
         assertThrows(IOException::class.java) {
@@ -1062,7 +1068,7 @@ class TraceRecorderTest {
         transport = BluetoothTransport.LOW_ENERGY,
     )
 
-    private fun localizedEstimate(status: String) = EstimateUiModel(
+    private fun localizedEstimate(status: EstimateState) = EstimateUiModel(
         status = status,
         meanXMetres = 1.0,
         meanZMetres = 2.0,

@@ -1,9 +1,9 @@
 package dev.arsignallocator.ui
 
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.CompleteScanDevice
 import dev.arsignallocator.model.DeviceKey
-import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.ProbabilityCell
 import dev.arsignallocator.model.TrackingMetrics
@@ -45,7 +45,7 @@ class CompleteScanScreenTest {
     )
 
     private fun localizedEstimate() = EstimateUiModel(
-        status = ESTIMATE_STATUS_EKF,
+        status = EstimateState.EKF,
         meanXMetres = 1.0,
         meanZMetres = 2.0,
         covarianceXX = 1.0,

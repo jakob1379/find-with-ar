@@ -95,7 +95,7 @@ internal fun VariantTrackingPanel(
             item { DebugRow("Independent updates", state.metrics.acceptedCount.toString()) }
             item { DebugRow("Rejected: no pose", state.metrics.rejectedNoPoseCount.toString()) }
             item { DebugRow("Path", "${"%.2f".format(state.metrics.pathLengthMetres)} m") }
-            item { DebugRow("Estimator", state.estimate?.status ?: "not initialized") }
+            item { DebugRow("Estimator", state.estimate?.status?.name ?: "not initialized") }
             item {
                 DebugRow(
                     "Ambiguity",

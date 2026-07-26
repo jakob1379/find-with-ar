@@ -6,9 +6,9 @@ import com.google.gson.JsonParser
 import com.google.gson.Strictness
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceKey
-import dev.arsignallocator.model.ESTIMATE_STATUS_EKF
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
@@ -549,9 +549,6 @@ class TraceRecorder internal constructor(
 
     private fun validateEstimate(estimate: EstimateUiModel?) {
         if (estimate == null) return
-        require(estimate.status in setOf("COLLECTING", "GRID_MULTIMODAL", "GRID_UNIMODAL", "EKF")) {
-            "Estimator status is invalid"
-        }
         val mean = listOf(estimate.meanXMetres, estimate.meanZMetres)
         require(mean.all { it == null } || mean.all { it?.isFinite() == true }) {
             "Estimator mean requires two finite values or two nulls"
@@ -1123,7 +1120,10 @@ internal object TraceV2Validator {
             require((status == "insufficient_evidence") == (estimate == null)) {
                 "Device state status and estimator disagree"
             }
-            require(estimate == null || estimate.model.status.lowercase(Locale.ROOT) == status) {
+            require(
+                estimate == null ||
+                    estimate.model.status.name.lowercase(Locale.ROOT) == status
+            ) {
                 "Device state status and estimator status disagree"
             }
             require(
@@ -1199,7 +1199,7 @@ internal object TraceV2Validator {
         }
         return RecoveredEstimate(
             model = EstimateUiModel(
-                status = status.uppercase(Locale.ROOT),
+                status = EstimateState.valueOf(status.uppercase(Locale.ROOT)),
                 meanXMetres = meanX,
                 meanZMetres = meanZ,
                 covarianceXX = covariance[0],
@@ -1563,7 +1563,10 @@ object TraceJsonEncoder {
             append('{')
             field("device_key", state.key.value, first = true)
             field("transport", state.transport.name.lowercase(Locale.ROOT))
-            field("status", state.estimate?.status?.lowercase(Locale.ROOT) ?: "insufficient_evidence")
+            field(
+                "status",
+                state.estimate?.status?.name?.lowercase(Locale.ROOT) ?: "insufficient_evidence",
+            )
             append(",\"estimator\":")
             appendEstimator(state.estimate, state.localized)
             append('}')
@@ -1580,8 +1583,12 @@ object TraceJsonEncoder {
             return
         }
         append('{')
-        field("kind", if (estimate.status == ESTIMATE_STATUS_EKF) "ekf" else "bayesian_grid", first = true)
-        field("status", estimate.status.lowercase(Locale.ROOT))
+        field(
+            "kind",
+            if (estimate.status == EstimateState.EKF) "ekf" else "bayesian_grid",
+            first = true,
+        )
+        field("status", estimate.status.name.lowercase(Locale.ROOT))
         field("localized", localized)
         nullableField("mean_x_m", estimate.meanXMetres)
         nullableField("mean_z_m", estimate.meanZMetres)

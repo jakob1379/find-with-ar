@@ -1,8 +1,8 @@
 package dev.arsignallocator.ui
 
+import dev.arsignallocator.localization.EstimateState
 import dev.arsignallocator.model.ArRuntimeStatus
 import dev.arsignallocator.model.BluetoothTransport
-import dev.arsignallocator.model.ESTIMATE_STATUS_GRID_MULTIMODAL
 import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.model.hasVisibleRegion
@@ -147,7 +147,7 @@ internal fun trackingUiPolicy(
                 EstimateVisualization.HIDDEN -> PublicTrackingState.BROAD_AREA
                 EstimateVisualization.POINT -> PublicTrackingState.LIKELY_AREA_FOUND
                 EstimateVisualization.REGION -> if (
-                    state.estimate?.status == ESTIMATE_STATUS_GRID_MULTIMODAL ||
+                    state.estimate?.status == EstimateState.GRID_MULTIMODAL ||
                     (state.estimate?.ambiguity ?: 1.0) > MAX_POINT_AMBIGUITY
                 ) {
                     PublicTrackingState.BROAD_AREA
