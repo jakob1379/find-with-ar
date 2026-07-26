@@ -1,4 +1,4 @@
-package dev.arsignallocator
+package dev.arsignallocator.trace
 
 import android.content.ActivityNotFoundException
 import android.content.Intent

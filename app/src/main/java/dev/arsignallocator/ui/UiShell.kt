@@ -50,15 +50,15 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import dev.arsignallocator.TRACE_CONTENT_DISCLOSURE
 import dev.arsignallocator.R
 import dev.arsignallocator.model.BluetoothTransport
 import dev.arsignallocator.model.DeviceCandidate
 import dev.arsignallocator.model.LocatorUiState
-import dev.arsignallocator.redactedDescription
 import dev.arsignallocator.monetization.BillingState
 import dev.arsignallocator.monetization.ConsentState
+import dev.arsignallocator.trace.TRACE_CONTENT_DISCLOSURE
 import dev.arsignallocator.trace.TraceSummary
+import dev.arsignallocator.trace.redactedDescription
 import java.io.File
 import java.text.DateFormat
 import java.util.Date

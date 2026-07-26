@@ -29,6 +29,13 @@ import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceStore
 import dev.arsignallocator.trace.TraceRecorder
 import dev.arsignallocator.trace.TraceSummary
+import dev.arsignallocator.trace.SupportDetails
+import dev.arsignallocator.trace.completedTraceAt
+import dev.arsignallocator.trace.isCompletedTrace
+import dev.arsignallocator.trace.launchExternal
+import dev.arsignallocator.trace.redactedDescription
+import dev.arsignallocator.trace.shareTraceIntent
+import dev.arsignallocator.trace.supportIntent
 import dev.arsignallocator.ui.SignalLocatorApp
 import dev.arsignallocator.ui.rememberVariantMonetizationUi
 import java.io.File

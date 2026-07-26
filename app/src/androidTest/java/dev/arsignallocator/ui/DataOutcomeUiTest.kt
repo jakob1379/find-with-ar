@@ -16,11 +16,11 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso
 import dev.arsignallocator.R
-import dev.arsignallocator.TRACE_CONTENT_DISCLOSURE
 import dev.arsignallocator.monetization.BillingState
 import dev.arsignallocator.monetization.ConsentState
 import dev.arsignallocator.monetization.EntitlementState
 import dev.arsignallocator.monetization.PrivacyOptionsRequirement
+import dev.arsignallocator.trace.TRACE_CONTENT_DISCLOSURE
 import dev.arsignallocator.trace.TraceMode
 import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.trace.TraceSummary

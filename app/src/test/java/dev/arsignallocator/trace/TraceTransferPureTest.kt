@@ -1,8 +1,5 @@
-package dev.arsignallocator
+package dev.arsignallocator.trace
 
-import dev.arsignallocator.trace.TraceMode
-import dev.arsignallocator.trace.TraceOutcome
-import dev.arsignallocator.trace.TraceSummary
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

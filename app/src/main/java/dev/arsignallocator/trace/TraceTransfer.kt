@@ -1,12 +1,10 @@
-package dev.arsignallocator
+package dev.arsignallocator.trace
 
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
-import dev.arsignallocator.trace.TraceMode
-import dev.arsignallocator.trace.TraceSummary
 import java.io.File
 
 const val TRACE_MIME_TYPE = "application/x-ndjson"
