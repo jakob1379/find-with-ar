@@ -5,9 +5,12 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from ar_signal_analysis.metrics import (
+    FinalEstimateMetrics,
+    PathMetrics,
+    StrongestRssiMetrics,
     final_estimate_metrics,
     path_metrics,
     percentile,
@@ -15,7 +18,51 @@ from ar_signal_analysis.metrics import (
 )
 from ar_signal_analysis.schema import Trace
 
-type Report = dict[str, Any]
+
+class ErrorSummary(TypedDict):
+    count: int
+    median_error_m: float | None
+    p90_error_m: float | None
+    mean_error_m: float | None
+
+
+class QualityGates(TypedDict):
+    beats_strongest_rssi_median: bool | None
+    open_room_median_le_1_5_m: bool | None
+    furnished_room_median_le_2_5_m: bool | None
+    held_out_p90_le_3_m: bool | None
+    nominal_80pct_coverage_between_70_and_90pct: bool | None
+
+
+class SessionReport(TypedDict):
+    session_id: str
+    source: str | None
+    environment: str | None
+    labelled: bool
+    path: PathMetrics
+    strongest_rssi_baseline: StrongestRssiMetrics | None
+    final_estimate: FinalEstimateMetrics | None
+
+
+class ReportSummary(TypedDict):
+    session_count: int
+    labelled_session_count: int
+    estimated_session_count: int
+    coverage_session_count: int
+    held_out_session_count: int
+    strongest_rssi_baseline: ErrorSummary
+    estimator: ErrorSummary
+    median_improvement_m: float | None
+    relative_median_improvement: float | None
+    empirical_coverage: float | None
+    gates: QualityGates
+
+
+class Report(TypedDict):
+    report_schema_version: int
+    coverage_probability: float
+    summary: ReportSummary
+    sessions: list[SessionReport]
 
 
 def build_calibration_report(
@@ -28,7 +75,7 @@ def build_calibration_report(
     if not 0 < coverage_probability < 1:
         raise ValueError("coverage_probability must be between zero and one")
 
-    sessions: list[Report] = []
+    sessions: list[SessionReport] = []
     baseline_errors: list[float] = []
     estimator_errors: list[float] = []
     coverage_values: list[bool] = []
@@ -77,8 +124,8 @@ def build_calibration_report(
 
     baseline_summary = _error_summary(baseline_errors)
     estimator_summary = _error_summary(estimator_errors)
-    empirical_coverage = (
-        sum(coverage_values) / len(coverage_values) if coverage_values else None
+    empirical_coverage: float | None = (
+        float(sum(coverage_values)) / len(coverage_values) if coverage_values else None
     )
     median_baseline = baseline_summary["median_error_m"]
     median_estimator = estimator_summary["median_error_m"]
@@ -99,11 +146,10 @@ def build_calibration_report(
     furnished_errors = by_environment.get("furnished", []) + by_environment.get(
         "furnished_room", []
     )
-    gates = {
+    paired_median = percentile(paired_improvements, 0.5)
+    gates: QualityGates = {
         "beats_strongest_rssi_median": (
-            percentile(paired_improvements, 0.5) > 0
-            if paired_improvements
-            else None
+            paired_median > 0 if paired_median is not None else None
         ),
         "open_room_median_le_1_5_m": _threshold_gate(open_errors, 0.5, 1.5),
         "furnished_room_median_le_2_5_m": _threshold_gate(
@@ -112,7 +158,9 @@ def build_calibration_report(
         "held_out_p90_le_3_m": _threshold_gate(held_out_errors, 0.9, 3.0),
         "nominal_80pct_coverage_between_70_and_90pct": (
             0.7 <= empirical_coverage <= 0.9
-            if coverage_probability == 0.8 and len(coverage_values) >= 10
+            if coverage_probability == 0.8
+            and len(coverage_values) >= 10
+            and empirical_coverage is not None
             else None
         ),
     }
@@ -168,9 +216,21 @@ def format_text_report(report: Report) -> str:
     lines.append("Sessions:")
     for session in report["sessions"]:
         path = session["path"]
-        baseline_error = _nested(session, "strongest_rssi_baseline", "error_m")
-        estimate_error = _nested(session, "final_estimate", "error_m")
-        covered = _nested(session, "final_estimate", "covered")
+        baseline_error = (
+            session["strongest_rssi_baseline"]["error_m"]
+            if session["strongest_rssi_baseline"] is not None
+            else None
+        )
+        estimate_error = (
+            session["final_estimate"]["error_m"]
+            if session["final_estimate"] is not None
+            else None
+        )
+        covered = (
+            session["final_estimate"]["covered"]
+            if session["final_estimate"] is not None
+            else None
+        )
         lines.append(
             f"- {session['session_id']}: {path['accepted_count']} accepted, "
             f"path {_format_measurement(path['path_length_m'], 'm')}, "
@@ -190,7 +250,7 @@ def format_text_report(report: Report) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _error_summary(errors: Sequence[float]) -> Report:
+def _error_summary(errors: Sequence[float]) -> ErrorSummary:
     return {
         "count": len(errors),
         "median_error_m": percentile(errors, 0.5),
@@ -210,18 +270,13 @@ def _source_name(source: Path | None) -> str | None:
     return str(source) if source is not None else None
 
 
-def _nested(value: Report, outer: str, inner: str) -> Any:
-    nested = value.get(outer)
-    return nested.get(inner) if isinstance(nested, dict) else None
-
-
-def _format_measurement(value: Any, unit: str) -> str:
+def _format_measurement(value: object, unit: str) -> str:
     return f"{float(value):.2f} {unit}" if isinstance(value, int | float) else "n/a"
 
 
-def _format_percentage(value: Any) -> str:
+def _format_percentage(value: object) -> str:
     return f"{float(value):.1%}" if isinstance(value, int | float) else "n/a"
 
 
-def _format_bool(value: Any) -> str:
+def _format_bool(value: object) -> str:
     return "yes" if value is True else "no" if value is False else "n/a"

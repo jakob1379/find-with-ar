@@ -4,17 +4,66 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from math import hypot, isfinite, log, pi, sqrt
+from typing import NotRequired, TypedDict
 
 import numpy as np
 import numpy.typing as npt
 
 from ar_signal_analysis.schema import EstimatorSnapshot, GroundTruth, Trace
 
-type MetricValue = float | int | bool | str | None
-type Metrics = dict[str, MetricValue]
+
+class StrongestRssiMetrics(TypedDict):
+    sequence: int
+    rssi_dbm: int
+    x_m: float
+    z_m: float
+    error_m: float | None
 
 
-def strongest_rssi_baseline(trace: Trace) -> Metrics | None:
+class PathMetrics(TypedDict):
+    observation_count: int
+    accepted_count: int
+    rejected_count: int
+    pose_association_rate: float | None
+    accepted_rate: float | None
+    duration_s: float | None
+    path_length_m: float
+    net_displacement_m: float
+    span_x_m: float
+    span_z_m: float
+    spatial_rms_m: float
+    minor_spread_m: float
+    major_spread_m: float
+    geometry_ratio: float
+    unique_spatial_buckets: int
+    advertisement_interval_median_ms: float | None
+    rssi_median_dbm: float | None
+    rssi_mad_db: float | None
+
+
+class EllipseMetrics(TypedDict):
+    probability: float
+    error_m: float
+    mahalanobis_sq: float | None
+    threshold: float
+    covered: bool
+    area_m2: float
+
+
+class FinalEstimateMetrics(TypedDict):
+    kind: str
+    status: str
+    x_m: float
+    z_m: float
+    error_m: float | None
+    probability: float
+    covered: bool | None
+    area_m2: float | None
+    mahalanobis_sq: float | None
+    threshold: NotRequired[float]
+
+
+def strongest_rssi_baseline(trace: Trace) -> StrongestRssiMetrics | None:
     """Use the AR pose at the single strongest accepted RSSI observation."""
 
     candidates = [
@@ -26,24 +75,25 @@ def strongest_rssi_baseline(trace: Trace) -> Metrics | None:
         return None
     strongest = max(candidates, key=lambda item: (item.rssi_dbm, -item.sequence))
     assert strongest.pose is not None
-    result: Metrics = {
+    result: StrongestRssiMetrics = {
         "sequence": strongest.sequence,
         "rssi_dbm": strongest.rssi_dbm,
         "x_m": strongest.pose.x_m,
         "z_m": strongest.pose.z_m,
+        "error_m": (
+            horizontal_error_m(
+                strongest.pose.x_m,
+                strongest.pose.z_m,
+                trace.session.ground_truth,
+            )
+            if trace.session.ground_truth is not None
+            else None
+        ),
     }
-    if trace.session.ground_truth is not None:
-        result["error_m"] = horizontal_error_m(
-            strongest.pose.x_m,
-            strongest.pose.z_m,
-            trace.session.ground_truth,
-        )
-    else:
-        result["error_m"] = None
     return result
 
 
-def path_metrics(trace: Trace, *, spatial_bucket_m: float = 0.25) -> Metrics:
+def path_metrics(trace: Trace, *, spatial_bucket_m: float = 0.25) -> PathMetrics:
     """Summarize movement and spatial diversity of accepted camera poses."""
 
     if spatial_bucket_m <= 0:
@@ -56,7 +106,7 @@ def path_metrics(trace: Trace, *, spatial_bucket_m: float = 0.25) -> Metrics:
     all_count = len(trace.observations)
     associated_count = sum(observation.pose is not None for observation in trace.observations)
     rejected_count = all_count - sum(observation.accepted for observation in trace.observations)
-    result: Metrics = {
+    result: PathMetrics = {
         "observation_count": all_count,
         "accepted_count": len(accepted),
         "rejected_count": rejected_count,
@@ -142,7 +192,7 @@ def ellipse_metrics(
     covariance: npt.ArrayLike,
     ground_truth: GroundTruth,
     probability: float = 0.8,
-) -> Metrics:
+) -> EllipseMetrics:
     """Calculate 2D Gaussian ellipse area, Mahalanobis distance, and containment."""
 
     if not 0 < probability < 1:
@@ -185,7 +235,9 @@ def ellipse_metrics(
     }
 
 
-def final_estimate_metrics(trace: Trace, *, probability: float = 0.8) -> Metrics | None:
+def final_estimate_metrics(
+    trace: Trace, *, probability: float = 0.8
+) -> FinalEstimateMetrics | None:
     """Score the final location-bearing estimator snapshot in a labelled trace."""
 
     ground_truth = trace.session.ground_truth
@@ -201,7 +253,7 @@ def final_estimate_metrics(trace: Trace, *, probability: float = 0.8) -> Metrics
         return None
     assert snapshot.mean_x_m is not None
     assert snapshot.mean_z_m is not None
-    result: Metrics = {
+    result: FinalEstimateMetrics = {
         "kind": snapshot.kind,
         "status": snapshot.status,
         "x_m": snapshot.mean_x_m,
