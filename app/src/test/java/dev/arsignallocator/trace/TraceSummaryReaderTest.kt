@@ -21,7 +21,7 @@ class TraceSummaryReaderTest {
             monotonicClockNanos = ArrayDeque(listOf(0L, 3_000_000_000L))::removeFirst,
             sessionIdFactory = { "single-summary" },
         )
-        recorder.start(
+        recorder.startSingleTarget(
             "1.0.0",
             "Phone",
             TargetHandle(

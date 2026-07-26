@@ -38,7 +38,7 @@ class TraceRecorderTest {
             bootIdProvider = { "raw-boot" },
         )
 
-        val active = recorder.start("1.0.0", "Test phone", target)
+        val active = recorder.startSingleTarget("1.0.0", "Test phone", target)
         recorder.record(sample("source-key", "Secret beacon", 20L), null)
         val completed = recorder.finish(TraceOutcome.YES, pathLengthMetres = 1.5).file
 
@@ -70,7 +70,7 @@ class TraceRecorderTest {
             wallClockMillis = { 0L },
             sessionIdFactory = { "complete-scan" },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
 
         recorder.record(sample("hardware-a", "One", 100L), null)
         recorder.record(sample("hardware-a", "Two", 110L, BluetoothTransport.CLASSIC), null)
@@ -107,7 +107,7 @@ class TraceRecorderTest {
             wallClockMillis = { 0L },
             sessionIdFactory = { "ambiguous-event" },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
 
         assertThrows(IllegalArgumentException::class.java) {
             recorder.recordEvent(
@@ -126,7 +126,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "single-identity" },
         )
-        recorder.start("1.0.0", "Test phone", target("selected", "AA:BB:CC:DD:EE:FF", null))
+        recorder.startSingleTarget("1.0.0", "Test phone", target("selected", "AA:BB:CC:DD:EE:FF", null))
 
         assertThrows(IllegalArgumentException::class.java) {
             recorder.record(sample("other", null, 10L), null)
@@ -157,7 +157,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "invalid-inputs" },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
         val valid = sample("source", null, 100L)
         val invalid = listOf(
             valid.copy(ble = valid.ble.copy(receivedAtElapsedNanos = -1L)),
@@ -192,7 +192,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "blank-boundaries" },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
         recorder.recordEvent(1L, TraceEventCode.AR_STATE, detail = " \t ")
 
         val payload = recorder.finish(TraceOutcome.SKIPPED, note = "\n").file!!.readText()
@@ -209,7 +209,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "reason-combination" },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
 
         assertThrows(IllegalArgumentException::class.java) {
             recorder.finish(TraceOutcome.YES, TraceOutcomeReason.OTHER)
@@ -234,7 +234,7 @@ class TraceRecorderTest {
                 monotonicClockNanos = { 0L },
                 sessionIdFactory = { "answer-$index" },
             )
-            recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+            recorder.startCompleteScan("1", "phone")
             val payload = recorder.finish(outcome).file!!.readText()
             assertTrue(payload.contains("\"outcome\":\"${outcome.wireValue}\""))
         }
@@ -246,7 +246,7 @@ class TraceRecorderTest {
                 monotonicClockNanos = { 0L },
                 sessionIdFactory = { "reason-$index" },
             )
-            recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+            recorder.startCompleteScan("1", "phone")
             val payload = recorder.finish(
                 if (index % 2 == 0) TraceOutcome.NO else TraceOutcome.NOT_SURE,
                 reason,
@@ -261,7 +261,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "too-long" },
         )
-        recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1", "phone")
         assertThrows(IllegalArgumentException::class.java) {
             recorder.finish(TraceOutcome.NO, note = "😀".repeat(501))
         }
@@ -275,7 +275,7 @@ class TraceRecorderTest {
             wallClockMillis = { times.removeFirst() },
             sessionIdFactory = { "live" },
         )
-        val active = recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        val active = recorder.startCompleteScan("1.0.0", "Test phone")
 
         assertTrue(recorder.completedTraces().isEmpty())
         assertTrue(active.exists())
@@ -318,7 +318,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "observed" },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
         recorder.record(sample("source-a", null, 1_000_000_000L), localizedEstimate("GRID_MULTIMODAL"))
         recorder.record(
             sample("source-b", null, 2_000_000_000L, BluetoothTransport.CLASSIC),
@@ -358,7 +358,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "localization-gates" },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
         recorder.record(
             sample("source-a", null, 100L),
             localizedEstimate("GRID_MULTIMODAL"),
@@ -378,7 +378,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "recovered-localization-gates" },
         ).apply {
-            start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+            startCompleteScan("1.0.0", "Test phone")
             record(
                 sample("source-a", null, 100L),
                 localizedEstimate("GRID_MULTIMODAL"),
@@ -526,23 +526,23 @@ class TraceRecorderTest {
             sessionIdFactory = { sessionIds.removeFirst() },
         )
 
-        recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1", "phone")
         val first = recorder.finish(TraceOutcome.INCOMPLETE).file!!
-        recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1", "phone")
         val second = recorder.finish(TraceOutcome.INCOMPLETE).file!!
         first.setLastModified(Long.MAX_VALUE)
         second.setLastModified(0L)
 
         assertEquals(listOf(second, first), recorder.completedTraces())
         assertTrue(recorder.deleteTrace(second))
-        recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1", "phone")
         val third = recorder.finish(TraceOutcome.INCOMPLETE).file!!
 
         assertEquals(3L, completionGeneration(third))
         assertEquals(listOf(third, first), recorder.completedTraces())
 
         assertTrue(recorder.deleteAllTraces().isEmpty())
-        recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1", "phone")
         val fourth = recorder.finish(TraceOutcome.INCOMPLETE).file!!
         assertEquals(4L, completionGeneration(fourth))
         assertEquals(listOf(fourth), recorder.completedTraces())
@@ -598,7 +598,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 2_000_000_000L },
             sessionIdFactory = { "selected-only" },
         ).apply {
-            start("1.0.0", "Test phone", target)
+            startSingleTarget("1.0.0", "Test phone", target)
             close()
         }
 
@@ -628,7 +628,7 @@ class TraceRecorderTest {
             sessionIdFactory = { "rebooted" },
             bootIdProvider = { "boot-a" },
         ).apply {
-            start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+            startCompleteScan("1.0.0", "Test phone")
             close()
         }
 
@@ -665,7 +665,7 @@ class TraceRecorderTest {
                 sessionIdFactory = { "case-$index" },
                 bootIdProvider = { "same-boot" },
             ).apply {
-                start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+                startCompleteScan("1.0.0", "Test phone")
                 record(sample("first", null, 100L), null)
                 record(sample("second", null, 200L), null)
                 close()
@@ -688,7 +688,7 @@ class TraceRecorderTest {
             monotonicClockNanos = { 0L },
             sessionIdFactory = { "invalid-terminal" },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
         recorder.record(sample("source", null, 100L), null)
         val completed = recorder.finish(TraceOutcome.YES).file!!
         val active = java.io.File(directory, "signal-trace-invalid-terminal.active.ndjson")
@@ -728,7 +728,7 @@ class TraceRecorderTest {
                 }
             },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
 
         val failed = recorder.finish(TraceOutcome.INCOMPLETE)
 
@@ -739,7 +739,7 @@ class TraceRecorderTest {
                 .any { it.name == "signal-trace-write-fails.active.ndjson" },
         )
 
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
         val completed = recorder.finish(TraceOutcome.INCOMPLETE)
 
         assertTrue(completed.file?.name?.endsWith("-write-recovers.ndjson") == true)
@@ -757,7 +757,7 @@ class TraceRecorderTest {
             sessionIdFactory = { "prefix-failure" },
             writerFactory = { file -> PrefixThenThrowWriter(file) },
         )
-        val active = recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        val active = recorder.startCompleteScan("1.0.0", "Test phone")
         val confirmed = active.readBytes()
 
         val failed = recorder.finish(TraceOutcome.YES)
@@ -789,7 +789,7 @@ class TraceRecorderTest {
                 renameAttempts != 1 && source.renameTo(destination)
             },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
 
         val failed = recorder.finish(TraceOutcome.INCOMPLETE)
 
@@ -800,7 +800,7 @@ class TraceRecorderTest {
                 .any { it.name == "signal-trace-rename-fails.active.ndjson" },
         )
 
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
         val completed = recorder.finish(TraceOutcome.INCOMPLETE)
 
         assertTrue(completed.file?.name?.endsWith("-rename-recovers.ndjson") == true)
@@ -820,7 +820,7 @@ class TraceRecorderTest {
             sessionIdFactory = { "android-v2-fixture" },
             bootIdProvider = { "boot-雪-😀" },
         )
-        recorder.start("1.0.0", "Test phone 📱", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone 📱")
         recorder.record(sample("source-a", null, 100L, rssiDbm = -61), null)
         recorder.record(
             sample(
@@ -901,7 +901,7 @@ class TraceRecorderTest {
             writerFactory = { file -> SelectiveFailureWriter(file, failures, append = false) },
             appendWriterFactory = { file -> SelectiveFailureWriter(file, failures, append = true) },
         )
-        recorder.start("1.0.0", "Test phone", TraceMode.COMPLETE_SCAN)
+        recorder.startCompleteScan("1.0.0", "Test phone")
 
         assertThrows(IOException::class.java) {
             recorder.record(sample("failed-observation", null, 100L), localizedEstimate("EKF"))

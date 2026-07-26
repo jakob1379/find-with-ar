@@ -134,7 +134,7 @@ data class TraceFinalizationResult(
     val error: String? = null,
 )
 
-class TraceRecorder(
+class TraceRecorder internal constructor(
     private val traceDirectory: File,
     private val wallClockMillis: () -> Long = System::currentTimeMillis,
     private val monotonicClockNanos: () -> Long = System::nanoTime,
@@ -168,20 +168,19 @@ class TraceRecorder(
         return completedFiles()
     }
 
-    @Synchronized
-    fun start(appVersion: String, deviceModel: String, target: TargetHandle): File =
-        start(appVersion, deviceModel, TraceMode.SINGLE_TARGET, target)
+    fun startSingleTarget(appVersion: String, deviceModel: String, target: TargetHandle): File =
+        startSession(appVersion, deviceModel, TraceMode.SINGLE_TARGET, target)
+
+    fun startCompleteScan(appVersion: String, deviceModel: String): File =
+        startSession(appVersion, deviceModel, TraceMode.COMPLETE_SCAN)
 
     @Synchronized
-    fun start(
+    private fun startSession(
         appVersion: String,
         deviceModel: String,
         mode: TraceMode,
         target: TargetHandle? = null,
     ): File {
-        require((mode == TraceMode.SINGLE_TARGET) == (target != null)) {
-            "SINGLE_TARGET requires a target; COMPLETE_SCAN must not persist one"
-        }
         require(appVersion.isNotBlank() && deviceModel.isNotBlank()) {
             "App version and device model must not be blank"
         }

@@ -24,7 +24,6 @@ import dev.arsignallocator.model.TargetHandle
 import dev.arsignallocator.monetization.EntitlementState
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
-import dev.arsignallocator.trace.TraceMode
 import dev.arsignallocator.trace.TraceOutcome
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
@@ -965,7 +964,7 @@ class LocatorViewModelTest {
                 sessionIdFactory = { "history-${++session}" },
             )
             repeat(11) {
-                recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+                recorder.startCompleteScan("1", "phone")
                 recorder.finish(TraceOutcome.SKIPPED)
             }
             val viewModel = viewModel(recorder, dispatcher)
@@ -1049,7 +1048,7 @@ class LocatorViewModelTest {
                 sessionIdFactory = { "delete-failure" },
                 deleteFile = { file -> !failDelete && file.delete() },
             )
-            recorder.start("1", "phone", TraceMode.COMPLETE_SCAN)
+            recorder.startCompleteScan("1", "phone")
             recorder.finish(TraceOutcome.SKIPPED)
             failDelete = true
             val viewModel = viewModel(recorder, dispatcher)

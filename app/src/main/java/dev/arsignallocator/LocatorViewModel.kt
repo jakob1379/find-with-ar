@@ -32,7 +32,6 @@ import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceEventCode
 import dev.arsignallocator.trace.TraceFinalizationResult
 import dev.arsignallocator.trace.TraceRecorder
-import dev.arsignallocator.trace.TraceMode
 import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.trace.TraceOutcomeReason
 import dev.arsignallocator.trace.TraceSummary
@@ -237,7 +236,7 @@ class LocatorViewModel(
             val traceError = runCatching {
                 traceIo {
                     if (operation != traceOperation) return@traceIo
-                    traceRecorder.start(appVersion, deviceModel, candidate.handle)
+                    traceRecorder.startSingleTarget(appVersion, deviceModel, candidate.handle)
                     if (operation == traceOperation) {
                         beginTrace(operation, SCANNER_SINGLE_TARGET)
                     }
@@ -301,11 +300,7 @@ class LocatorViewModel(
             val traceError = runCatching {
                 traceIo {
                     if (operation != traceOperation) return@traceIo
-                    traceRecorder.start(
-                        appVersion,
-                        deviceModel,
-                        TraceMode.COMPLETE_SCAN,
-                    )
+                    traceRecorder.startCompleteScan(appVersion, deviceModel)
                     if (operation == traceOperation) {
                         beginTrace(operation, SCANNER_COMPLETE_SCAN)
                     }
