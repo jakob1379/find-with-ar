@@ -668,7 +668,7 @@ class LocatorViewModel(
     private suspend fun publishCompleteScanDevices() {
         if (_state.value.screen != AppScreen.COMPLETE_SCAN) return
         val now = clock.nowNanos()
-        val devices = completePipelines.values.map { pipeline ->
+        val devices = completePipelines.values.toList().map { pipeline ->
             val lastSeenAt = pipeline.metrics.lastSeenElapsedNanos
             val device = CompleteScanDevice(
                 key = pipeline.target.key,

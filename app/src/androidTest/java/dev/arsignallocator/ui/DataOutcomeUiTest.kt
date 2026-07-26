@@ -253,7 +253,7 @@ class DataOutcomeUiTest {
         }
 
         listOf(
-            "Pro — Complete Scan + no ads",
+            "Pro — no ads",
             "Data",
             "Privacy policy",
             "Google privacy choices",

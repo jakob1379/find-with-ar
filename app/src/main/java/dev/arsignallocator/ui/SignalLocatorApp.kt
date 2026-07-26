@@ -545,7 +545,7 @@ internal fun rememberVisibleEstimate(
 }
 
 @Composable
-private fun TrackingCamera(
+internal fun TrackingCamera(
     state: LocatorUiState,
     projection: ArProjectionSnapshot?,
     arPoseSource: ArCorePoseSource,
@@ -849,13 +849,3 @@ private const val PREFERENCES_NAME = "ui_shell"
 private const val ONBOARDING_COMPLETE = "onboarding_complete"
 private const val PERMISSIONS_REQUESTED = "permissions_requested"
 private const val SIGNAL_FRESHNESS_TICK_MILLIS = 500L
-private val COMPLETE_SCAN_MAP_COLORS = listOf(
-    Color(0xFFFFB74D),
-    Color(0xFF4DD0E1),
-    Color(0xFFCE93D8),
-    Color(0xFFAED581),
-    Color(0xFFFF8A80),
-)
-
-internal fun completeScanMapColor(index: Int): Color =
-    COMPLETE_SCAN_MAP_COLORS[index % COMPLETE_SCAN_MAP_COLORS.size]

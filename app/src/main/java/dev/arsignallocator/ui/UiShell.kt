@@ -66,6 +66,8 @@ import kotlinx.coroutines.launch
 
 internal enum class DevicePage { PICKER, SETTINGS, DATA, HELP, SUPPORT, ABOUT, NOTICES }
 
+internal const val COMPLETE_SCAN_ENABLED = false
+
 internal data class DeviceCandidateGroups(
     val named: List<DeviceCandidate>,
     val unnamed: List<DeviceCandidate>,
@@ -100,12 +102,24 @@ internal fun OnboardingScreen(onContinue: () -> Unit) {
         ) {
             item {
                 Text(
-                    "Find the likely area, not a false exact direction",
+                    "Find a lost device that is still turned on",
                     style = MaterialTheme.typography.headlineSmall,
                 )
             }
             item { OnboardingIllustration() }
-            item { HelpSafetyContent() }
+            item {
+                Text(
+                    "• The device must be turned on and visible to nearby-device scanning. Some " +
+                        "turned-on devices may not appear.\n\n" +
+                        "• Move around the room with your phone to narrow the likely area. The " +
+                        "camera measures movement without recording; GPS coordinates are not read.\n\n" +
+                        "• Nearby-device and precise-location access enable the estimate. " +
+                        "Measurements stay on your phone unless you export or share them.\n\n" +
+                        "• The shown area is an estimate, not an exact location. Watch for " +
+                        "obstacles and only locate devices you own or have permission to find. " +
+                        "This is not an emergency or theft-recovery service.",
+                )
+            }
             item {
                 Button(onClick = onContinue, modifier = Modifier.fillMaxWidth()) {
                     Text("Continue")
@@ -209,10 +223,6 @@ internal fun HelpSafetyContent() {
         Text(
             "Estimates can be wrong. Watch for obstacles, stay aware of your surroundings, and " +
                 "only locate devices you own or have permission to find.",
-        )
-        Text(
-            "Complete Scan may observe other people's devices in radio range. Use it only in " +
-                "spaces you have permission to survey.",
         )
         Text(
             "AR Device Finder is not an emergency or theft-recovery service.",
@@ -328,19 +338,21 @@ internal fun DevicePickerScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item {
-                Button(onClick = onCompleteScan, modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Complete Scan")
-                        Surface(
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            contentColor = MaterialTheme.colorScheme.primary,
-                            shape = RoundedCornerShape(8.dp),
+            if (COMPLETE_SCAN_ENABLED) {
+                item {
+                    Button(onClick = onCompleteScan, modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("Pro", Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                            Text("Complete Scan")
+                            Surface(
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                contentColor = MaterialTheme.colorScheme.primary,
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text("Pro", Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                            }
                         }
                     }
                 }

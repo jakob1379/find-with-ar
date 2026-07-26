@@ -60,7 +60,7 @@ internal fun ProPurchaseSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "Pro — Complete Scan + no ads",
+                "Pro — no ads",
                 style = MaterialTheme.typography.headlineSmall,
             )
             Text(proEntitlementStatus(billingState))
@@ -131,7 +131,7 @@ internal fun ProSettingsCard(billingState: BillingState, onOpen: () -> Unit) {
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text("Pro — Complete Scan + no ads", style = MaterialTheme.typography.titleMedium)
+            Text("Pro — no ads", style = MaterialTheme.typography.titleMedium)
             Text(proEntitlementStatus(billingState), style = MaterialTheme.typography.bodySmall)
             Text(
                 billingState.localizedPrice ?: "Price unavailable",

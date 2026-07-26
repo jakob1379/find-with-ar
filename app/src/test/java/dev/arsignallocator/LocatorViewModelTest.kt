@@ -26,6 +26,7 @@ import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceRecorder
 import dev.arsignallocator.trace.TraceMode
 import dev.arsignallocator.trace.TraceOutcome
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -756,6 +757,87 @@ class LocatorViewModelTest {
         }
 
     @Test
+    fun `complete scan publishes a stable snapshot while another device arrives`() {
+        try {
+            runTest {
+                val dispatcher = StandardTestDispatcher(testScheduler)
+                val io = QueuedDispatcher()
+                Dispatchers.setMain(dispatcher)
+                val clock = FakeClock(1_000_000_000L)
+                val scanner = FakeScanner(packet(target("picker"), clock.nowNanos(), -65))
+                val engines = mutableListOf<FakeLocationEngine>()
+                val viewModel = LocatorViewModel(
+                    scanner = scanner,
+                    locationEngine = FakeLocationEngine(),
+                    synchronizer = SampleSynchronizer(),
+                    traceRecorder = TraceRecorder(
+                        temporaryFolder.newFolder("complete-snapshot"),
+                        monotonicClockNanos = clock::nowNanos,
+                        sessionIdFactory = { "complete-snapshot" },
+                    ),
+                    clock = clock,
+                    appVersion = "test",
+                    deviceModel = "fake",
+                    completeScanEntitlement = { EntitlementState.PRO_CONFIRMED },
+                    locationEngineFactory = { FakeLocationEngine().also(engines::add) },
+                    computationDispatcher = dispatcher,
+                    ioDispatcher = io,
+                )
+                viewModel.setRuntimeReady(true)
+                repeat(2) {
+                    runCurrent()
+                    io.runQueued()
+                }
+                viewModel.startCompleteScan()
+                repeat(3) {
+                    runCurrent()
+                    io.runQueued()
+                }
+
+                val targets = (1..3).map {
+                    target(
+                        key = "D0$it",
+                        address = "AA:BB:CC:DD:EE:0$it",
+                        name = "Device $it",
+                        transport = BluetoothTransport.LOW_ENERGY,
+                    )
+                }
+                targets.take(2).forEach {
+                    scanner.tracking.emit(packet(it, clock.nowNanos(), -60))
+                    repeat(10) {
+                        runCurrent()
+                        io.runQueued()
+                    }
+                }
+                assertEquals(2, viewModel.state.value.completeScanDevices.size)
+
+                advanceTimeBy(1_001L)
+                runCurrent()
+                assertTrue(io.hasQueued())
+                scanner.tracking.emit(packet(targets.last(), clock.nowNanos(), -60))
+                runCurrent()
+                assertEquals(3, engines.size)
+                io.runQueued()
+                runCurrent()
+                repeat(10) {
+                    io.runQueued()
+                    runCurrent()
+                }
+
+                assertEquals(3, viewModel.state.value.completeScanDevices.size)
+                viewModel.stopAndReturnToDevices()
+                viewModel.onAppStopped()
+                repeat(10) {
+                    io.runQueued()
+                    runCurrent()
+                }
+            }
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `lifecycle stop cancels active scanners finalizes traces and resumes discovery`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
@@ -1001,6 +1083,20 @@ class LocatorViewModelTest {
 
     private class FakeClock(var value: Long) : MonotonicClock {
         override fun nowNanos(): Long = value
+    }
+
+    private class QueuedDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            tasks.addLast(block)
+        }
+
+        fun runQueued() {
+            while (tasks.isNotEmpty()) tasks.removeFirst().run()
+        }
+
+        fun hasQueued(): Boolean = tasks.isNotEmpty()
     }
 
     private class FakeScanner(private val discoveryPacket: ScanPacket) : BleScanner {
