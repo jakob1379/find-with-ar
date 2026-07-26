@@ -396,7 +396,7 @@ internal fun projectSymmetricPsd(
         }
     }
     val eigenvectors = identity(size)
-    repeat(64) {
+    for (iteration in 0 until 64) {
         var p = 0
         var q = 1.coerceAtMost(size - 1)
         var largest = 0.0
@@ -409,7 +409,7 @@ internal fun projectSymmetricPsd(
                 }
             }
         }
-        if (largest < 1e-12 || size == 1) return@repeat
+        if (largest < 1e-12 || size == 1) break
         val offDiagonal = matrix[p][q]
         val tau = (matrix[q][q] - matrix[p][p]) / (2.0 * offDiagonal)
         val tangent = if (tau >= 0.0) {
