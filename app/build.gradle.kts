@@ -511,7 +511,6 @@ dependencies {
     implementation(libs.activity.compose)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.lifecycle.viewmodel.compose)
-    implementation(libs.fragment)
     implementation(libs.coroutines.android)
     implementation(libs.arcore)
     implementation("com.google.code.gson:gson:2.11.0")
