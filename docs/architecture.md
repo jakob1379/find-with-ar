@@ -15,6 +15,10 @@ flowchart TD
 ## Boundaries
 
 - `:app` owns Android permissions, Bluetooth scanning, ARCore lifecycle, callback timing, trace export and UI state.
+- `:app` also owns monetization: `BillingEntitlementController` publishes Play Billing entitlement,
+  `AdsConsentController` publishes consent and SDK readiness, and `MainActivity` combines those
+  states with build-variant policy. The Compose shell uses the resulting ad eligibility and routes
+  Complete Scan either to the runtime or the Pro purchase sheet.
 - `:localization` is Android-free Kotlin. It owns robust aggregation, the Bayesian grid posterior, HPD regions, path-geometry checks, EKF refinement and deterministic simulation.
 - `analysis` reads the same versioned NDJSON trace contract. It computes the strongest-RSSI baseline, estimate error and uncertainty coverage without depending on Android.
 
