@@ -76,14 +76,14 @@ data class Matrix2(
 
 data class SpatialRssiSample(
     val phonePosition: Vec2,
-    val phoneHeightM: Double,
+    val phoneHeightMetres: Double,
     val rssiDbm: Double,
     val measurementVarianceDb2: Double = 9.0,
     val elapsedRealtimeNanos: Long = 0L,
     val phoneForward: Vec2? = null,
 ) {
     init {
-        require(phoneHeightM.isFinite()) { "Phone height must be finite" }
+        require(phoneHeightMetres.isFinite()) { "Phone height must be finite" }
         require(rssiDbm.isFinite()) { "RSSI must be finite" }
         require(measurementVarianceDb2.isFinite() && measurementVarianceDb2 > 0.0) {
             "Measurement variance must be finite and positive"
@@ -106,7 +106,7 @@ data class HpdRegion(
     val probabilityLevel: Double,
     val enclosedProbability: Double,
     val areaSquareMetres: Double,
-    val cellResolutionM: Double,
+    val cellResolutionMetres: Double,
     val cells: List<GridCell>,
 ) {
     init {
@@ -116,7 +116,7 @@ data class HpdRegion(
     }
 
     fun contains(point: Vec2): Boolean {
-        val halfCell = cellResolutionM / 2.0 + 1e-12
+        val halfCell = cellResolutionMetres / 2.0 + 1e-12
         return cells.any { cell ->
             abs(cell.center.x - point.x) <= halfCell &&
                 abs(cell.center.z - point.z) <= halfCell
@@ -141,8 +141,8 @@ enum class EstimateState {
 data class DataQuality(
     val samplesReceived: Int,
     val independentSpatialBuckets: Int,
-    val positionBaselineM: Double,
-    val minorAxisSpreadM: Double,
+    val positionBaselineMetres: Double,
+    val minorAxisSpreadMetres: Double,
     val hasInformativeGeometry: Boolean,
 )
 
@@ -155,8 +155,8 @@ data class EstimatorDiagnostics(
 /**
  * Public estimate shared by grid and EKF implementations.
  *
- * [mapXZ] is always safe to use as a best cell/state. [meanXZ] is deliberately
- * null while the grid posterior is insufficiently constrained or multimodal.
+ * [mapXZ] is null until a posterior estimate exists and is safe to use when non-null. [meanXZ]
+ * is deliberately null while the grid posterior is insufficiently constrained or multimodal.
  */
 data class LocationEstimate(
     val mapXZ: Vec2?,

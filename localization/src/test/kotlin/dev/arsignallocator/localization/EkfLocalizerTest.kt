@@ -16,7 +16,7 @@ class EkfLocalizerTest {
                 doubleArrayOf(0.0, 0.0, 16.0, 0.3),
                 doubleArrayOf(0.0, 0.0, 0.3, 0.4),
             ),
-            targetHeightM = 0.1,
+            targetHeightMetres = 0.1,
         )
         val filter = EkfLocalizer(initialization)
         val simulator = SyntheticRssiSimulator(
@@ -54,7 +54,7 @@ class EkfLocalizerTest {
                 covariance = Array(4) { row ->
                     DoubleArray(4) { column -> if (row == column) 0.5 else 0.0 }
                 },
-                targetHeightM = 0.1,
+                targetHeightMetres = 0.1,
             ),
         )
         val estimate = filter.update(

@@ -23,9 +23,9 @@ class PrecisionSimulationTest {
                 outlierProbability = 0.02,
                 outlierSigmaDb = 10.0,
             ),
-            maximumMedianErrorM = 1.5,
+            maximumMedianErrorMetres = 1.5,
         )
-        verify("severe", Environment(), maximumMedianErrorM = 2.5)
+        verify("severe", Environment(), maximumMedianErrorMetres = 2.5)
     }
 
     @Test
@@ -39,7 +39,7 @@ class PrecisionSimulationTest {
                 outlierSigmaDb = 10.0,
             ),
             samplesPerPosition = 1,
-            maximumMedianErrorM = 1.5,
+            maximumMedianErrorMetres = 1.5,
         )
     }
 
@@ -47,51 +47,51 @@ class PrecisionSimulationTest {
         name: String,
         environment: Environment,
         samplesPerPosition: Int = SAMPLES_PER_POSITION,
-        maximumMedianErrorM: Double,
+        maximumMedianErrorMetres: Double,
     ) {
         val results = SCENARIO_SEEDS.map {
             simulate(it, HybridGridEkfLocalizer(), environment, samplesPerPosition)
         }
-        val located = results.filter { it.errorM != null }
+        val located = results.filter { it.errorMetres != null }
         val summary = "$name: ${summarize(results)}"
-        val locatedErrors = located.map { requireNotNull(it.errorM) }
-        val baselineMedian = percentile(located.map(ScenarioResult::baselineErrorM).sorted(), 0.50)
+        val locatedErrors = located.map { requireNotNull(it.errorMetres) }
+        val baselineMedian = percentile(located.map(ScenarioResult::baselineErrorMetres).sorted(), 0.50)
         val allScenarioBaselineMedian = percentile(
-            results.map(ScenarioResult::baselineErrorM).sorted(),
+            results.map(ScenarioResult::baselineErrorMetres).sorted(),
             0.50,
         )
-        val mapMedianError = percentile(results.map(ScenarioResult::mapErrorM).sorted(), 0.50)
+        val mapMedianError = percentile(results.map(ScenarioResult::mapErrorMetres).sorted(), 0.50)
         val medianError = percentile(locatedErrors.sorted(), 0.50)
         val p90Error = percentile(locatedErrors.sorted(), 0.90)
-        val mapP90Error = percentile(results.map(ScenarioResult::mapErrorM).sorted(), 0.90)
-        val regionP90Area = percentile(results.map(ScenarioResult::regionAreaM2).sorted(), 0.90)
+        val mapP90Error = percentile(results.map(ScenarioResult::mapErrorMetres).sorted(), 0.90)
+        val regionP90Area = percentile(results.map(ScenarioResult::regionAreaSquareMetres).sorted(), 0.90)
 
         println(summary)
         assertTrue(summary, located.isNotEmpty())
-        assertTrue(summary, medianError <= maximumMedianErrorM)
+        assertTrue(summary, medianError <= maximumMedianErrorMetres)
         assertTrue(summary, p90Error <= 3.0)
         assertTrue(summary, mapMedianError < allScenarioBaselineMedian)
         assertTrue(summary, mapP90Error <= 3.0)
         assertTrue(summary, regionP90Area <= 35.0)
         assertTrue(summary, medianError < baselineMedian)
         assertTrue(summary, results.count(ScenarioResult::covered90).toDouble() / results.size >= 0.80)
-        assertTrue(summary, results.any { it.errorM == null })
+        assertTrue(summary, results.any { it.errorMetres == null })
     }
 
     private fun summarize(results: List<ScenarioResult>): String {
-        val located = results.filter { it.errorM != null }
-        val errors = located.map { requireNotNull(it.errorM) }.sorted()
-        val baselineErrors = results.map(ScenarioResult::baselineErrorM).sorted()
-        val locatedBaselineErrors = located.map(ScenarioResult::baselineErrorM).sorted()
+        val located = results.filter { it.errorMetres != null }
+        val errors = located.map { requireNotNull(it.errorMetres) }.sorted()
+        val baselineErrors = results.map(ScenarioResult::baselineErrorMetres).sorted()
+        val locatedBaselineErrors = located.map(ScenarioResult::baselineErrorMetres).sorted()
         val medianError = percentile(errors, 0.50)
         val p90Error = percentile(errors, 0.90)
         val medianBaseline = percentile(baselineErrors, 0.50)
         val medianLocatedBaseline = percentile(locatedBaselineErrors, 0.50)
-        val mapErrors = results.map(ScenarioResult::mapErrorM).sorted()
-        val regionAreas = results.map(ScenarioResult::regionAreaM2).sorted()
+        val mapErrors = results.map(ScenarioResult::mapErrorMetres).sorted()
+        val regionAreas = results.map(ScenarioResult::regionAreaSquareMetres).sorted()
         val coverage = results.count(ScenarioResult::covered90).toDouble() / results.size
-        val worst = located.sortedByDescending { it.errorM }.take(5).joinToString {
-            "${it.seed}=${"%.2f".format(it.errorM)} (${it.detail})"
+        val worst = located.sortedByDescending { it.errorMetres }.take(5).joinToString {
+            "${it.seed}=${"%.2f".format(it.errorMetres)} (${it.detail})"
         }
         return "located=${located.size}/${results.size}, " +
             "median=${"%.2f".format(medianError)}m, p90=${"%.2f".format(p90Error)}m, " +
@@ -166,7 +166,7 @@ class PrecisionSimulationTest {
                 localizer.update(
                     SpatialRssiSample(
                         phonePosition = phone,
-                        phoneHeightM = phoneHeight,
+                        phoneHeightMetres = phoneHeight,
                         rssiDbm = rssi,
                         measurementVarianceDb2 = 9.0,
                         elapsedRealtimeNanos = (
@@ -181,10 +181,10 @@ class PrecisionSimulationTest {
         val estimate = localizer.estimate()
         return ScenarioResult(
             seed = seed,
-            errorM = estimate.meanXZ?.distanceTo(target),
-            mapErrorM = requireNotNull(estimate.mapXZ).distanceTo(target),
-            regionAreaM2 = requireNotNull(estimate.area90SquareMetres),
-            baselineErrorM = strongestPosition.distanceTo(target),
+            errorMetres = estimate.meanXZ?.distanceTo(target),
+            mapErrorMetres = requireNotNull(estimate.mapXZ).distanceTo(target),
+            regionAreaSquareMetres = requireNotNull(estimate.area90SquareMetres),
+            baselineErrorMetres = strongestPosition.distanceTo(target),
             covered90 = estimate.contains90(target),
             detail = "A=${"%.1f".format(referenceRssi)}, n=${"%.2f".format(pathLossExponent)}, " +
                 "h=${"%.2f".format(targetHeight)}, target=$target, mean=${estimate.meanXZ}, " +
@@ -196,8 +196,8 @@ class PrecisionSimulationTest {
     }
 
     private fun HpdRegion.boundingDiameter(): Double {
-        val spanX = cells.maxOf { it.center.x } - cells.minOf { it.center.x } + cellResolutionM
-        val spanZ = cells.maxOf { it.center.z } - cells.minOf { it.center.z } + cellResolutionM
+        val spanX = cells.maxOf { it.center.x } - cells.minOf { it.center.x } + cellResolutionMetres
+        val spanZ = cells.maxOf { it.center.z } - cells.minOf { it.center.z } + cellResolutionMetres
         return sqrt(spanX * spanX + spanZ * spanZ)
     }
 
@@ -233,10 +233,10 @@ class PrecisionSimulationTest {
 
     private data class ScenarioResult(
         val seed: Int,
-        val errorM: Double?,
-        val mapErrorM: Double,
-        val regionAreaM2: Double,
-        val baselineErrorM: Double,
+        val errorMetres: Double?,
+        val mapErrorMetres: Double,
+        val regionAreaSquareMetres: Double,
+        val baselineErrorMetres: Double,
         val covered90: Boolean,
         val detail: String,
     )

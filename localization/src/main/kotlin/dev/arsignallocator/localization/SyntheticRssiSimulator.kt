@@ -8,12 +8,12 @@ import kotlin.math.sqrt
 data class SyntheticRssiConfig(
     val referenceRssiDbm: Double = -55.0,
     val pathLossExponent: Double = 2.2,
-    val targetHeightM: Double = 0.05,
-    val phoneHeightM: Double = 1.1,
+    val targetHeightMetres: Double = 0.05,
+    val phoneHeightMetres: Double = 1.1,
     val gaussianNoiseSigmaDb: Double = 2.0,
     val outlierProbability: Double = 0.0,
     val outlierSigmaDb: Double = 12.0,
-    val minDistanceM: Double = 0.15,
+    val minDistanceMetres: Double = 0.15,
     val reportedMeasurementVarianceDb2: Double = 4.0,
 ) {
     init {
@@ -21,7 +21,7 @@ data class SyntheticRssiConfig(
         require(gaussianNoiseSigmaDb >= 0.0)
         require(outlierProbability in 0.0..1.0)
         require(outlierSigmaDb >= 0.0)
-        require(minDistanceM > 0.0)
+        require(minDistanceMetres > 0.0)
         require(reportedMeasurementVarianceDb2 > 0.0)
     }
 }
@@ -38,9 +38,9 @@ class SyntheticRssiSimulator(
         phonePosition: Vec2,
         elapsedRealtimeNanos: Long = 0L,
     ): SpatialRssiSample {
-        val heightDelta = config.targetHeightM - config.phoneHeightM
+        val heightDelta = config.targetHeightMetres - config.phoneHeightMetres
         val distance = max(
-            config.minDistanceM,
+            config.minDistanceMetres,
             sqrt(targetPosition.squaredDistanceTo(phonePosition) + heightDelta * heightDelta),
         )
         val expected = config.referenceRssiDbm -
@@ -53,7 +53,7 @@ class SyntheticRssiSimulator(
         }
         return SpatialRssiSample(
             phonePosition = phonePosition,
-            phoneHeightM = config.phoneHeightM,
+            phoneHeightMetres = config.phoneHeightMetres,
             rssiDbm = expected + ordinaryNoise + outlierNoise,
             measurementVarianceDb2 = config.reportedMeasurementVarianceDb2,
             elapsedRealtimeNanos = elapsedRealtimeNanos,

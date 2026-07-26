@@ -29,7 +29,7 @@ class LocalizationAdapter(
         val estimate = localizer.update(
             SpatialRssiSample(
                 phonePosition = Vec2(pose.xMetres, pose.zMetres),
-                phoneHeightM = pose.yMetres,
+                phoneHeightMetres = pose.yMetres,
                 rssiDbm = observation.ble.rssiDbm.toDouble(),
                 measurementVarianceDb2 = requireNotNull(observation.rssiVarianceDb2),
                 elapsedRealtimeNanos = observation.ble.receivedAtElapsedNanos,
@@ -71,7 +71,7 @@ class LocalizationAdapter(
                         xMetres = cell.center.x,
                         zMetres = cell.center.z,
                         probability = cell.probability,
-                        resolutionMetres = hpd.cellResolutionM,
+                        resolutionMetres = hpd.cellResolutionMetres,
                     )
                 }.toList()
             }.orEmpty(),

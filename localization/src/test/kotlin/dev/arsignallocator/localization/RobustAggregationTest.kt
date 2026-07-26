@@ -7,12 +7,12 @@ import org.junit.Test
 class RobustAggregationTest {
     @Test
     fun `median aggregation resists a single RSSI outlier`() {
-        val aggregator = SpatialRssiAggregator(bucketSizeM = 0.5, minVarianceDb2 = 1.0)
+        val aggregator = SpatialRssiAggregator(bucketSizeMetres = 0.5, minVarianceDb2 = 1.0)
         listOf(-60.0, -61.0, -59.0, -60.0, -10.0).forEachIndexed { index, rssi ->
             aggregator.add(
                 SpatialRssiSample(
                     phonePosition = Vec2(0.1, 0.1),
-                    phoneHeightM = 1.1,
+                    phoneHeightMetres = 1.1,
                     rssiDbm = rssi,
                     measurementVarianceDb2 = 1.0,
                     elapsedRealtimeNanos = index.toLong(),

@@ -11,15 +11,15 @@ class BayesianGridLocalizerTest {
         maxX = 3.0,
         minZ = -3.0,
         maxZ = 3.0,
-        resolutionM = 0.2,
+        resolutionMetres = 0.2,
         referenceRssiHypothesesDbm = listOf(-55.0),
         pathLossExponentHypotheses = listOf(2.2),
-        targetHeightHypothesesM = listOf(0.1),
+        targetHeightHypothesesMetres = listOf(0.1),
         modelSigmaDb = 1.0,
-        spatialBucketSizeM = 0.2,
+        spatialBucketSizeMetres = 0.2,
         minSpatialBucketsForInitialization = 5,
-        minPositionBaselineM = 1.0,
-        minMinorAxisSpreadM = 0.1,
+        minPositionBaselineMetres = 1.0,
+        minMinorAxisSpreadMetres = 0.1,
     )
 
     @Test
@@ -27,7 +27,7 @@ class BayesianGridLocalizerTest {
         val localizer = BayesianGridLocalizer(exactConfig)
         val sample = SpatialRssiSample(
             phonePosition = Vec2(-1.4, 0.3),
-            phoneHeightM = 1.1,
+            phoneHeightMetres = 1.1,
             rssiDbm = -61.0,
             measurementVarianceDb2 = 1.0,
         )
@@ -187,8 +187,8 @@ class BayesianGridLocalizerTest {
     private fun simulatorConfig() = SyntheticRssiConfig(
         referenceRssiDbm = -55.0,
         pathLossExponent = 2.2,
-        targetHeightM = 0.1,
-        phoneHeightM = 1.1,
+        targetHeightMetres = 0.1,
+        phoneHeightMetres = 1.1,
         gaussianNoiseSigmaDb = 0.7,
         reportedMeasurementVarianceDb2 = 1.0,
     )

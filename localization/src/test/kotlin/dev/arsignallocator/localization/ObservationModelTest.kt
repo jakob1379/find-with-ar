@@ -9,14 +9,14 @@ class ObservationModelTest {
         val state = doubleArrayOf(1.2, -0.7, -54.0, 2.35)
         val sample = SpatialRssiSample(
             phonePosition = Vec2(-0.4, 1.1),
-            phoneHeightM = 1.15,
+            phoneHeightMetres = 1.15,
             rssiDbm = -62.0,
             phoneForward = Vec2(-0.8, -0.6),
         )
         val analytic = RssiObservationModel.predictAndJacobian(
             state,
             sample,
-            targetHeightM = 0.2,
+            targetHeightMetres = 0.2,
             bodyShadowAttenuationDb = 6.0,
         ).jacobian
         val step = 1e-6

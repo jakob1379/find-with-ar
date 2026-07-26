@@ -26,7 +26,7 @@ object RobustStatistics {
 
 data class AggregatedSpatialRssiSample(
     val phonePosition: Vec2,
-    val phoneHeightM: Double,
+    val phoneHeightMetres: Double,
     val rssiDbm: Double,
     val measurementVarianceDb2: Double,
     val rawSampleCount: Int,
@@ -42,12 +42,12 @@ data class AggregatedSpatialRssiSample(
  * mistaken for independent spatial evidence.
  */
 class SpatialRssiAggregator(
-    val bucketSizeM: Double = 0.35,
+    val bucketSizeMetres: Double = 0.35,
     private val minVarianceDb2: Double = 9.0,
     private val maxStoredSamplesPerBucket: Int = 101,
 ) {
     init {
-        require(bucketSizeM > 0.0)
+        require(bucketSizeMetres > 0.0)
         require(minVarianceDb2 > 0.0)
         require(maxStoredSamplesPerBucket > 0)
     }
@@ -60,8 +60,8 @@ class SpatialRssiAggregator(
     fun add(sample: SpatialRssiSample) {
         totalSamplesReceived += 1
         val key = BucketKey(
-            x = floor(sample.phonePosition.x / bucketSizeM).toInt(),
-            z = floor(sample.phonePosition.z / bucketSizeM).toInt(),
+            x = floor(sample.phonePosition.x / bucketSizeMetres).toInt(),
+            z = floor(sample.phonePosition.z / bucketSizeMetres).toInt(),
         )
         val samples = buckets.getOrPut(key) { mutableListOf() }
         samples += sample
@@ -86,7 +86,7 @@ class SpatialRssiAggregator(
                 RobustStatistics.median(samples.map { it.phonePosition.x }),
                 RobustStatistics.median(samples.map { it.phonePosition.z }),
             ),
-            phoneHeightM = RobustStatistics.median(samples.map(SpatialRssiSample::phoneHeightM)),
+            phoneHeightMetres = RobustStatistics.median(samples.map(SpatialRssiSample::phoneHeightMetres)),
             rssiDbm = RobustStatistics.median(rssiValues),
             measurementVarianceDb2 = max(
                 minVarianceDb2,

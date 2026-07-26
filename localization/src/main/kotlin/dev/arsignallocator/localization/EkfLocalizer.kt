@@ -55,18 +55,18 @@ object RssiObservationModel {
     fun predictAndJacobian(
         state: DoubleArray,
         sample: SpatialRssiSample,
-        targetHeightM: Double,
-        minDistanceM: Double = 0.15,
+        targetHeightMetres: Double,
+        minDistanceMetres: Double = 0.15,
         bodyShadowAttenuationDb: Double = 0.0,
     ): RssiPrediction {
         require(state.size == 4)
-        require(minDistanceM > 0.0)
+        require(minDistanceMetres > 0.0)
         val deltaX = state[0] - sample.phonePosition.x
         val deltaZ = state[1] - sample.phonePosition.z
-        val deltaHeight = targetHeightM - sample.phoneHeightM
+        val deltaHeight = targetHeightMetres - sample.phoneHeightMetres
         val rawDistanceSquared =
             deltaX * deltaX + deltaZ * deltaZ + deltaHeight * deltaHeight
-        val minimumDistanceSquared = minDistanceM * minDistanceM
+        val minimumDistanceSquared = minDistanceMetres * minDistanceMetres
         val distanceSquared = max(rawDistanceSquared, minimumDistanceSquared)
         val distance = sqrt(distanceSquared)
         val referenceRssi = state[2]
@@ -98,24 +98,24 @@ object RssiObservationModel {
 }
 
 data class EkfConfig(
-    val positionProcessVarianceM2: Double = 1e-5,
+    val positionProcessVarianceSquareMetres: Double = 1e-5,
     val referenceRssiProcessVarianceDb2: Double = 0.02,
     val pathLossProcessVariance: Double = 0.0002,
     val modelVarianceDb2: Double = 16.0,
     val normalizedInnovationSquaredGate: Double = 9.0,
-    val minDistanceM: Double = 0.15,
-    val spatialBucketSizeM: Double = 0.35,
+    val minDistanceMetres: Double = 0.15,
+    val spatialBucketSizeMetres: Double = 0.35,
     val minCovarianceEigenvalue: Double = 1e-9,
     val referenceRssiBoundsDbm: ClosedFloatingPointRange<Double> = -100.0..-20.0,
     val pathLossBounds: ClosedFloatingPointRange<Double> = 1.0..5.0,
 ) {
     init {
-        require(positionProcessVarianceM2 >= 0.0)
+        require(positionProcessVarianceSquareMetres >= 0.0)
         require(referenceRssiProcessVarianceDb2 >= 0.0)
         require(pathLossProcessVariance >= 0.0)
         require(modelVarianceDb2 > 0.0)
         require(normalizedInnovationSquaredGate > 0.0)
-        require(minDistanceM > 0.0 && spatialBucketSizeM > 0.0)
+        require(minDistanceMetres > 0.0 && spatialBucketSizeMetres > 0.0)
         require(minCovarianceEigenvalue >= 0.0)
     }
 }
@@ -133,7 +133,7 @@ class EkfLocalizer(
         initialization.covariance,
         config.minCovarianceEigenvalue,
     )
-    private val targetHeightM = initialization.targetHeightM
+    private val targetHeightMetres = initialization.targetHeightMetres
     private var totalSamples = initialDataQuality.samplesReceived
     private var acceptedUpdates = 0
     private var rejectedUpdates = 0
@@ -157,8 +157,8 @@ class EkfLocalizer(
         bucketPositions[bucket] = sample.phonePosition
 
         val predictedCovariance = Array(4) { row -> covariance[row].copyOf() }
-        predictedCovariance[0][0] += config.positionProcessVarianceM2
-        predictedCovariance[1][1] += config.positionProcessVarianceM2
+        predictedCovariance[0][0] += config.positionProcessVarianceSquareMetres
+        predictedCovariance[1][1] += config.positionProcessVarianceSquareMetres
         predictedCovariance[2][2] += config.referenceRssiProcessVarianceDb2
         predictedCovariance[3][3] += config.pathLossProcessVariance
         covariance = projectSymmetricPsd(predictedCovariance, config.minCovarianceEigenvalue)
@@ -166,8 +166,8 @@ class EkfLocalizer(
         val prediction = RssiObservationModel.predictAndJacobian(
             state = state,
             sample = sample,
-            targetHeightM = targetHeightM,
-            minDistanceM = config.minDistanceM,
+            targetHeightMetres = targetHeightMetres,
+            minDistanceMetres = config.minDistanceMetres,
             bodyShadowAttenuationDb = initial.bodyShadowAttenuationDb,
         )
         val measurementVariance = sample.measurementVarianceDb2 + config.modelVarianceDb2
@@ -286,14 +286,14 @@ class EkfLocalizer(
     private fun EkfInitialization.deepCopy(): EkfInitialization = EkfInitialization(
         state.copyOf(),
         Array(covariance.size) { covariance[it].copyOf() },
-        targetHeightM,
+        targetHeightMetres,
         observedPhonePositions.toList(),
         bodyShadowAttenuationDb,
     )
 
     private fun bucketKey(position: Vec2): Pair<Int, Int> = Pair(
-        floor(position.x / config.spatialBucketSizeM).toInt(),
-        floor(position.z / config.spatialBucketSizeM).toInt(),
+        floor(position.x / config.spatialBucketSizeMetres).toInt(),
+        floor(position.z / config.spatialBucketSizeMetres).toInt(),
     )
 }
 

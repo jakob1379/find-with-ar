@@ -21,11 +21,6 @@ object PermissionPolicy {
         }
     }
 
-    fun missingPermissions(
-        grantedPermissions: Set<String>,
-        sdkInt: Int = Build.VERSION.SDK_INT,
-    ): List<String> = requiredPermissions(sdkInt).filterNot(grantedPermissions::contains)
-
     fun permissionsToRequest(
         missingPermissions: Collection<String>,
         sdkInt: Int = Build.VERSION.SDK_INT,

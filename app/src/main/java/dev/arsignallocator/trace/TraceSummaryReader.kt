@@ -93,6 +93,4 @@ object TraceSummaryReader {
             localizedDeviceCount = outcomeRecord["localized_device_count"].asInt,
         )
     }
-
-    fun readNewest(files: List<File>): List<TraceSummary> = files.take(10).map(::read)
 }
