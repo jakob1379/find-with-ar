@@ -321,7 +321,7 @@ internal class TraceStore(
     private fun initialize() {
         if (initialized) return
         initialized = true
-        val files = runCatching { recorder.initialize() }
+        val files = runCatching { recorder.recoverAndListCompletedTraces() }
         publish(
             files.getOrDefault(emptyList()),
             if (files.isFailure || recorder.storageError != null) HISTORY_READ_ERROR else null,

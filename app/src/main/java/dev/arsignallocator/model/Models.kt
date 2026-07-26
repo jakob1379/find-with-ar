@@ -153,7 +153,7 @@ data class CompleteScanDevice(
     val transport: BluetoothTransport,
     val metrics: TrackingMetrics,
     val estimate: EstimateUiModel?,
-    val lastSeen: Boolean = false,
+    val signalLost: Boolean = false,
 ) {
     val localized: Boolean get() = estimate?.isLocalized() == true
 }

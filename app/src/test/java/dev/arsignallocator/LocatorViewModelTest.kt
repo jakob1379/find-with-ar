@@ -708,8 +708,8 @@ class LocatorViewModelTest {
                 advanceTimeBy(1_001L)
                 runCurrent()
                 val freshness = viewModel.state.value.completeScanDevices.associateBy { it.key }
-                assertTrue(freshness.getValue(ble.key).lastSeen)
-                assertFalse(freshness.getValue(classic.key).lastSeen)
+                assertTrue(freshness.getValue(ble.key).signalLost)
+                assertFalse(freshness.getValue(classic.key).signalLost)
 
                 poseSource.emit(pose(at = clock.nowNanos(), x = 2.0))
                 runCurrent()

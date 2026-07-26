@@ -162,7 +162,7 @@ class TraceRecorder internal constructor(
         private set
 
     @Synchronized
-    fun initialize(): List<File> {
+    fun recoverAndListCompletedTraces(): List<File> {
         storageError = null
         recoverActiveFiles()
         return completedFiles()

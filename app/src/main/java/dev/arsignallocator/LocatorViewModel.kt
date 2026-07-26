@@ -22,6 +22,7 @@ import dev.arsignallocator.model.EstimateUiModel
 import dev.arsignallocator.model.LocatorUiState
 import dev.arsignallocator.model.PoseObservation
 import dev.arsignallocator.model.PoseTrackingState
+import dev.arsignallocator.model.SynchronizedObservation
 import dev.arsignallocator.model.TargetHandle
 import dev.arsignallocator.model.TrackingMetrics
 import dev.arsignallocator.monetization.EntitlementState
@@ -439,15 +440,7 @@ class LocatorViewModel internal constructor(
 
     private suspend fun processTrackedPacket(packet: ScanPacket) {
         val operation = traceStore.currentOperation()
-        val (joined, estimate) = withContext(computationDispatcher) {
-            val synchronized = synchronizer.synchronize(packet.observation)
-            val latest = if (synchronized.accepted) {
-                locationEngine.update(synchronized)
-            } else {
-                locationEngine.estimate()
-            }
-            synchronized to latest
-        }
+        val (joined, estimate) = localize(packet, synchronizer, locationEngine)
         if (operation != null) {
             try {
                 traceStore.record(operation, joined, estimate, packet.target)
@@ -492,15 +485,8 @@ class LocatorViewModel internal constructor(
         packet.target.advertisedName?.takeIf(String::isNotBlank)?.let {
             pipeline.displayName = it
         }
-        val (joined, estimate) = withContext(computationDispatcher) {
-            val synchronized = pipeline.synchronizer.synchronize(packet.observation)
-            val latest = if (synchronized.accepted) {
-                pipeline.locationEngine.update(synchronized)
-            } else {
-                pipeline.locationEngine.estimate()
-            }
-            synchronized to latest
-        }
+        val (joined, estimate) =
+            localize(packet, pipeline.synchronizer, pipeline.locationEngine)
         if (operation != null) {
             try {
                 traceStore.record(operation, joined, estimate, packet.target)
@@ -523,6 +509,19 @@ class LocatorViewModel internal constructor(
             lastSeenElapsedNanos = packet.observation.receivedAtElapsedNanos,
         )
         publishCompleteScanDevices()
+    }
+
+    private suspend fun localize(
+        packet: ScanPacket,
+        synchronizer: SampleSynchronizer,
+        locationEngine: LocationEngine,
+    ): Pair<SynchronizedObservation, EstimateUiModel> = withContext(computationDispatcher) {
+        val joined = synchronizer.synchronize(packet.observation)
+        joined to if (joined.accepted) {
+            locationEngine.update(joined)
+        } else {
+            locationEngine.estimate()
+        }
     }
 
     private fun onPose(pose: PoseObservation) {
@@ -563,10 +562,10 @@ class LocatorViewModel internal constructor(
                 transport = pipeline.target.transport,
                 metrics = pipeline.metrics,
                 estimate = pipeline.estimate,
-                lastSeen = lastSeenAt != null &&
+                signalLost = lastSeenAt != null &&
                     now - lastSeenAt > COMPLETE_SCAN_LAST_SEEN_NANOS,
             )
-            recordSignalState(pipeline.target, device.lastSeen)
+            recordSignalState(pipeline.target, device.signalLost)
             device
         }
         _state.update { current ->

@@ -28,7 +28,7 @@ class CompleteScanScreenTest {
         )
         assertEquals(
             "Last seen · estimate frozen",
-            completeScanDeviceStatus(sparse.copy(lastSeen = true), 2.0),
+            completeScanDeviceStatus(sparse.copy(signalLost = true), 2.0),
         )
     }
 

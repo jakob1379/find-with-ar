@@ -301,7 +301,7 @@ class TraceRecorderTest {
             wallClockMillis = { 1_000L },
             monotonicClockNanos = { 1_000_000_000L },
         )
-        val recovered = recorder.initialize().single()
+        val recovered = recorder.recoverAndListCompletedTraces().single()
         val lines = recovered.readLines()
 
         assertFalse(active.exists())
@@ -331,7 +331,7 @@ class TraceRecorderTest {
             temporaryFolder.root,
             wallClockMillis = { 5_000L },
             monotonicClockNanos = { 5_000_000_000L },
-        ).initialize().single()
+        ).recoverAndListCompletedTraces().single()
         val outcome = recovered.readLines().last()
 
         assertTrue(outcome.contains("\"duration_ms\":5000"))
@@ -390,7 +390,7 @@ class TraceRecorderTest {
             traceDirectory = temporaryFolder.root,
             wallClockMillis = { 1_000L },
             monotonicClockNanos = { 1_000_000_000L },
-        ).initialize().single().readLines().last()
+        ).recoverAndListCompletedTraces().single().readLines().last()
 
         assertTrue(outcome.contains("\"localized_device_count\":0"))
         assertTrue(outcome.contains("\"localized\":false"))
@@ -414,7 +414,7 @@ class TraceRecorderTest {
         active.writeText("${sessionLine("finished")}\n$outcome\n")
 
         val recorder = TraceRecorder(temporaryFolder.root)
-        val payload = recorder.initialize().single().readText()
+        val payload = recorder.recoverAndListCompletedTraces().single().readText()
 
         assertEquals(1, "\"record_type\":\"outcome\"".toRegex().findAll(payload).count())
         assertTrue(payload.contains("\"outcome\":\"YES\""))
@@ -426,7 +426,7 @@ class TraceRecorderTest {
         active.writeText("{\"schema_version\":2,\"record_type\":\"session\"}\n")
 
         val recorder = TraceRecorder(temporaryFolder.root)
-        recorder.initialize()
+        recorder.recoverAndListCompletedTraces()
 
         assertFalse(active.exists())
         assertTrue(
@@ -448,7 +448,7 @@ class TraceRecorderTest {
         )
 
         val recorder = TraceRecorder(temporaryFolder.root)
-        recorder.initialize()
+        recorder.recoverAndListCompletedTraces()
 
         assertFalse(active.exists())
         assertTrue(
@@ -475,7 +475,7 @@ class TraceRecorderTest {
             wallClockMillis = { 1_000L },
             monotonicClockNanos = { 1_000_000_000L },
         )
-        val history = recorder.initialize()
+        val history = recorder.recoverAndListCompletedTraces()
 
         assertEquals(10, history.size)
         val recovered = history.single { it.name.endsWith("-crashed.ndjson") }
@@ -495,7 +495,7 @@ class TraceRecorderTest {
         }
 
         val recorder = TraceRecorder(temporaryFolder.root, deleteFile = { false })
-        recorder.initialize()
+        recorder.recoverAndListCompletedTraces()
 
         assertEquals(11, recorder.completedTraces().size)
         assertTrue(recorder.storageError!!.contains("1 expired"))
@@ -560,7 +560,7 @@ class TraceRecorderTest {
             }
         }
 
-        val history = TraceRecorder(temporaryFolder.root).initialize()
+        val history = TraceRecorder(temporaryFolder.root).recoverAndListCompletedTraces()
 
         assertEquals(10, history.size)
         assertEquals(11L, completionGeneration(history.first()))
@@ -606,7 +606,7 @@ class TraceRecorderTest {
             traceDirectory = temporaryFolder.root,
             wallClockMillis = { 6_000L },
             monotonicClockNanos = { 7_000_000_000L },
-        ).initialize().single().readLines().last()
+        ).recoverAndListCompletedTraces().single().readLines().last()
 
         assertTrue(recovered.contains("\"duration_ms\":5000"))
         assertTrue(recovered.contains("\"observed_device_count\":0"))
@@ -637,7 +637,7 @@ class TraceRecorderTest {
             wallClockMillis = { 6_000L },
             monotonicClockNanos = { 100_000_000_000L },
             bootIdProvider = { "boot-b" },
-        ).initialize().single().readLines().last()
+        ).recoverAndListCompletedTraces().single().readLines().last()
 
         assertTrue(outcome.contains("\"duration_ms\":5000"))
     }
@@ -674,7 +674,7 @@ class TraceRecorderTest {
             active.writeText(mutate(active.readText()))
 
             val recorder = TraceRecorder(directory, bootIdProvider = { "same-boot" })
-            assertTrue(recorder.initialize().isEmpty())
+            assertTrue(recorder.recoverAndListCompletedTraces().isEmpty())
             assertTrue(directory.listFiles().orEmpty().single().name.endsWith(".quarantined.ndjson"))
         }
     }
@@ -701,7 +701,7 @@ class TraceRecorderTest {
         )
 
         val recovered = TraceRecorder(directory)
-        assertTrue(recovered.initialize().isEmpty())
+        assertTrue(recovered.recoverAndListCompletedTraces().isEmpty())
         assertEquals(
             setOf(
                 ".signal-trace-completion-generation",
@@ -767,7 +767,7 @@ class TraceRecorderTest {
         assertArrayEquals(confirmed, active.readBytes())
         assertTrue(recorder.completedTraces().isEmpty())
 
-        val recovered = recorder.initialize().single()
+        val recovered = recorder.recoverAndListCompletedTraces().single()
         val lines = recovered.readLines()
         assertFalse(active.exists())
         assertEquals(2, lines.size)
@@ -882,7 +882,7 @@ class TraceRecorderTest {
             wallClockMillis = { 2_000L },
             monotonicClockNanos = { 7_000_000_000L },
             bootIdProvider = { "boot-雪-😀" },
-        ).initialize().single()
+        ).recoverAndListCompletedTraces().single()
         val lines = recovered.readLines()
 
         assertEquals(session, lines.first())
@@ -960,7 +960,7 @@ class TraceRecorderTest {
                 records.joinToString(separator = "\n", postfix = "\n"),
             )
 
-            val recovered = TraceRecorder(directory).initialize()
+            val recovered = TraceRecorder(directory).recoverAndListCompletedTraces()
 
             assertEquals(case["name"].asString, case["valid"].asBoolean, recovered.isNotEmpty())
         }
@@ -973,7 +973,7 @@ class TraceRecorderTest {
         val active = temporaryFolder.newFile("signal-trace-android-v2-fixture.active.ndjson")
         active.writeText(records.joinToString(separator = "\n", postfix = "\n"))
 
-        assertTrue(TraceRecorder(temporaryFolder.root).initialize().isEmpty())
+        assertTrue(TraceRecorder(temporaryFolder.root).recoverAndListCompletedTraces().isEmpty())
         assertTrue(
             temporaryFolder.root.listFiles().orEmpty()
                 .any { it.name.endsWith(".quarantined.ndjson") },
@@ -1028,7 +1028,7 @@ class TraceRecorderTest {
                 records.joinToString(separator = "\n", postfix = "\n"),
             )
 
-            assertTrue(TraceRecorder(directory).initialize().isEmpty())
+            assertTrue(TraceRecorder(directory).recoverAndListCompletedTraces().isEmpty())
             assertTrue(directory.listFiles().orEmpty().single().name.endsWith(".quarantined.ndjson"))
         }
     }

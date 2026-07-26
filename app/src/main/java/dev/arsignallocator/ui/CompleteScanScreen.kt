@@ -160,7 +160,7 @@ internal fun completeScanDeviceStatus(
     device: CompleteScanDevice,
     pathLengthMetres: Double,
 ): String = when {
-    device.lastSeen -> "Last seen · estimate frozen"
+    device.signalLost -> "Last seen · estimate frozen"
     device.metrics.receivedCount < 3 -> "Not enough signal"
     device.metrics.acceptedCount < 3 || pathLengthMetres < 1.0 -> "More movement needed"
     selectEstimateVisualization(device.estimate) == EstimateVisualization.POINT ->
