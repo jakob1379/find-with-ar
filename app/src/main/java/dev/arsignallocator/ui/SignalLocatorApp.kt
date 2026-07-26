@@ -83,7 +83,7 @@ import dev.arsignallocator.monetization.completeScanRoute
 import dev.arsignallocator.permissions.PermissionPolicy
 import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.trace.TraceSummary
-import dev.arsignallocator.trace.TraceHistoryStore
+import dev.arsignallocator.trace.TraceStore
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlin.math.PI
@@ -98,7 +98,7 @@ import kotlin.math.sqrt
 @Composable
 internal fun SignalLocatorApp(
     viewModel: LocatorViewModel,
-    traceHistory: TraceHistoryStore,
+    traceStore: TraceStore,
     arPoseSource: ArCorePoseSource,
     billingState: BillingState,
     consentState: ConsentState,
@@ -115,8 +115,8 @@ internal fun SignalLocatorApp(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val traceSummaries by traceHistory.summaries.collectAsStateWithLifecycle()
-    val historyError by traceHistory.error.collectAsStateWithLifecycle()
+    val traceSummaries by traceStore.summaries.collectAsStateWithLifecycle()
+    val historyError by traceStore.error.collectAsStateWithLifecycle()
     val preferences = remember(context) {
         context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     }
@@ -268,7 +268,7 @@ internal fun SignalLocatorApp(
                     onCompleteScan = requestCompleteScan,
                     onSettings = { devicePage = DevicePage.SETTINGS },
                     onExport = onExport,
-                    onDelete = traceHistory::deleteAllTraces,
+                    onDelete = traceStore::deleteAllTraces,
                     banner = {
                         if (proSheetOrigin == null) {
                             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -301,8 +301,8 @@ internal fun SignalLocatorApp(
                     onBack = { devicePage = DevicePage.SETTINGS },
                     onExport = onExport,
                     onShare = onShare,
-                    onDelete = traceHistory::deleteTrace,
-                    onDeleteAll = traceHistory::deleteAllTraces,
+                    onDelete = traceStore::deleteTrace,
+                    onDeleteAll = traceStore::deleteAllTraces,
                 )
                 DevicePage.HELP -> HelpScreen(onBack = { devicePage = DevicePage.SETTINGS })
                 DevicePage.SUPPORT -> ContactSupportScreen(

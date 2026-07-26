@@ -127,13 +127,13 @@ class LocatorViewModelTest {
             assertTrue(trace.readText().contains("\"outcome\":\"INCOMPLETE\""))
             assertTrue(viewModel.state.value.recoverableError!!.contains("unavailable"))
 
-            viewModel.traceHistoryStore.deleteAllTraces()
+            viewModel.traceStore.deleteAllTraces()
             runCurrent()
             assertEquals(trace, viewModel.state.value.lastTraceFile)
             assertTrue(trace.exists())
             assertEquals(
                 "Some sessions could not be deleted",
-                viewModel.traceHistoryStore.error.value,
+                viewModel.traceStore.error.value,
             )
         } finally {
             Dispatchers.resetMain()
@@ -888,9 +888,9 @@ class LocatorViewModelTest {
                     assertTrue(payload.contains("\"path_length_m\":1.5"))
                     assertEquals(
                         viewModel.state.value.lastTraceFile,
-                        viewModel.traceHistoryStore.summaries.value.single().file,
+                        viewModel.traceStore.summaries.value.single().file,
                     )
-                    assertNull(viewModel.traceHistoryStore.error.value)
+                    assertNull(viewModel.traceStore.error.value)
                     assertEquals(
                         1,
                         if (completeScan) {
@@ -970,14 +970,14 @@ class LocatorViewModelTest {
             val viewModel = viewModel(recorder, dispatcher)
             runCurrent()
 
-            assertEquals(10, viewModel.traceHistoryStore.summaries.value.size)
-            assertTrue(viewModel.traceHistoryStore.summaries.value.first().file.name.endsWith("-history-11.ndjson"))
+            assertEquals(10, viewModel.traceStore.summaries.value.size)
+            assertTrue(viewModel.traceStore.summaries.value.first().file.name.endsWith("-history-11.ndjson"))
 
-            viewModel.traceHistoryStore.deleteTrace(viewModel.traceHistoryStore.summaries.value.first().file)
+            viewModel.traceStore.deleteTrace(viewModel.traceStore.summaries.value.first().file)
             runCurrent()
 
-            assertEquals(9, viewModel.traceHistoryStore.summaries.value.size)
-            assertNull(viewModel.traceHistoryStore.error.value)
+            assertEquals(9, viewModel.traceStore.summaries.value.size)
+            assertNull(viewModel.traceStore.error.value)
         } finally {
             Dispatchers.resetMain()
         }
@@ -1053,13 +1053,13 @@ class LocatorViewModelTest {
             failDelete = true
             val viewModel = viewModel(recorder, dispatcher)
             runCurrent()
-            val file = viewModel.traceHistoryStore.summaries.value.single().file
+            val file = viewModel.traceStore.summaries.value.single().file
 
-            viewModel.traceHistoryStore.deleteTrace(file)
+            viewModel.traceStore.deleteTrace(file)
             runCurrent()
 
-            assertEquals(file, viewModel.traceHistoryStore.summaries.value.single().file)
-            assertEquals("The session could not be deleted", viewModel.traceHistoryStore.error.value)
+            assertEquals(file, viewModel.traceStore.summaries.value.single().file)
+            assertEquals("The session could not be deleted", viewModel.traceStore.error.value)
         } finally {
             Dispatchers.resetMain()
         }
