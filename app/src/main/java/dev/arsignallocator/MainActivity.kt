@@ -217,7 +217,7 @@ class MainActivity : ComponentActivity() {
         exportLauncher.launch(file.name)
     }
 
-    private fun shareTrace(file: File) {
+    internal fun shareTrace(file: File) {
         val uri = traceUri(file) ?: return
         val chooser = Intent.createChooser(shareTraceIntent(contentResolver, uri), "Share trace")
         if (!launchExternal(chooser, ::startActivity)) {
