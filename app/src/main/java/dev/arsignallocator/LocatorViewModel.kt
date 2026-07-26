@@ -31,16 +31,13 @@ import dev.arsignallocator.ar.PoseSource
 import dev.arsignallocator.sync.SampleSynchronizer
 import dev.arsignallocator.trace.TraceEventCode
 import dev.arsignallocator.trace.TraceFinalizationResult
+import dev.arsignallocator.trace.TraceHistoryStore
 import dev.arsignallocator.trace.TraceRecorder
 import dev.arsignallocator.trace.TraceOutcome
 import dev.arsignallocator.trace.TraceOutcomeReason
-import dev.arsignallocator.trace.TraceSummary
-import dev.arsignallocator.trace.TraceSummaryReader
-import java.io.File
 import java.util.Locale
 import kotlin.math.hypot
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -51,15 +48,13 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-class LocatorViewModel(
+class LocatorViewModel internal constructor(
     private val scanner: BleScanner,
     private val locationEngine: LocationEngine,
     private val synchronizer: SampleSynchronizer,
-    private val traceRecorder: TraceRecorder,
+    internal val traceHistoryStore: TraceHistoryStore,
     private val clock: MonotonicClock,
     private val appVersion: String,
     private val deviceModel: String,
@@ -67,14 +62,37 @@ class LocatorViewModel(
     private val locationEngineFactory: () -> LocationEngine = { LocalizationAdapter() },
     private val synchronizerFactory: () -> SampleSynchronizer = { SampleSynchronizer() },
     private val computationDispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
     private val _state = MutableStateFlow(LocatorUiState())
     val state: StateFlow<LocatorUiState> = _state.asStateFlow()
-    private val _traceSummaries = MutableStateFlow<List<TraceSummary>>(emptyList())
-    val traceSummaries: StateFlow<List<TraceSummary>> = _traceSummaries.asStateFlow()
-    private val _historyError = MutableStateFlow<String?>(null)
-    val historyError: StateFlow<String?> = _historyError.asStateFlow()
+    private val traceRecorder get() = traceHistoryStore.recorder
+
+    internal constructor(
+        scanner: BleScanner,
+        locationEngine: LocationEngine,
+        synchronizer: SampleSynchronizer,
+        traceRecorder: TraceRecorder,
+        clock: MonotonicClock,
+        appVersion: String,
+        deviceModel: String,
+        completeScanEntitlement: () -> EntitlementState = { EntitlementState.FREE },
+        locationEngineFactory: () -> LocationEngine = { LocalizationAdapter() },
+        synchronizerFactory: () -> SampleSynchronizer = { SampleSynchronizer() },
+        computationDispatcher: CoroutineDispatcher = Dispatchers.Default,
+        ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ) : this(
+        scanner = scanner,
+        locationEngine = locationEngine,
+        synchronizer = synchronizer,
+        traceHistoryStore = TraceHistoryStore(traceRecorder, ioDispatcher),
+        clock = clock,
+        appVersion = appVersion,
+        deviceModel = deviceModel,
+        completeScanEntitlement = completeScanEntitlement,
+        locationEngineFactory = locationEngineFactory,
+        synchronizerFactory = synchronizerFactory,
+        computationDispatcher = computationDispatcher,
+    )
 
     private var runtimeReady = false
     private var discoveryJob: Job? = null
@@ -89,7 +107,6 @@ class LocatorViewModel(
     private var traceOperation = 0L
     @Volatile
     private var activeTraceOperation: Long? = null
-    private val traceMutex = Mutex()
     private var tracedArState: ArRuntimeStatus? = null
     private var tracedScannerState: String? = null
     private val tracedEstimatorStates =
@@ -101,31 +118,6 @@ class LocatorViewModel(
     private var lastBreadcrumb: PoseObservation? = null
     private var latestPose: PoseObservation? = null
     private val completePipelines = linkedMapOf<RadioIdentity, CompleteDevicePipeline>()
-
-    init {
-        viewModelScope.launch {
-            val operation = traceOperation
-            val initialized = runCatching {
-                traceIo { historySnapshot(traceRecorder.initialize()) }
-            }
-            if (operation == traceOperation) {
-                val snapshot = initialized.getOrNull()
-                _traceSummaries.value = snapshot?.summaries.orEmpty()
-                _historyError.value = when {
-                    initialized.isFailure -> HISTORY_READ_ERROR
-                    snapshot?.hasInvalidTrace == true -> HISTORY_READ_ERROR
-                    traceRecorder.storageError != null -> HISTORY_READ_ERROR
-                    else -> null
-                }
-                _state.update {
-                    it.copy(
-                        lastTraceFile = snapshot?.files?.firstOrNull(),
-                        recoverableError = _historyError.value,
-                    )
-                }
-            }
-        }
-    }
 
     fun bindPoseSource(source: PoseSource) {
         poseJob?.cancel()
@@ -229,7 +221,7 @@ class LocatorViewModel(
             isDiscovering = false,
             arStatus = _state.value.arStatus,
             guidance = "Signal found. Walk sideways while keeping the camera uncovered",
-            recoverableError = _historyError.value,
+            recoverableError = null,
             lastTraceFile = previousTrace,
         )
         viewModelScope.launch {
@@ -293,7 +285,7 @@ class LocatorViewModel(
             screen = AppScreen.COMPLETE_SCAN,
             arStatus = previous.arStatus,
             guidance = "Move around the room to collect signal from different positions",
-            recoverableError = _historyError.value,
+            recoverableError = null,
             lastTraceFile = previous.lastTraceFile,
         )
         viewModelScope.launch {
@@ -382,8 +374,8 @@ class LocatorViewModel(
             )
         }
         viewModelScope.launch {
-            val (result, history) = traceIo {
-                val completed = if (activeTraceOperation == sessionOperation) {
+            val result = traceIo(refreshHistory = true) {
+                if (activeTraceOperation == sessionOperation) {
                     if (sessionOperation != null) {
                         recordScannerStateLocked(SCANNER_STOPPED)
                     }
@@ -392,65 +384,16 @@ class LocatorViewModel(
                 } else {
                     TraceFinalizationResult()
                 }
-                completed to historySnapshot(traceRecorder.completedTraces())
-            }
-            _traceSummaries.value = history.summaries
-            _historyError.value = when {
-                result.error != null -> TRACE_FINISH_ERROR
-                history.hasInvalidTrace -> HISTORY_READ_ERROR
-                else -> null
             }
             if (operation != traceOperation) return@launch
             _state.update {
                 it.copy(
                     lastTraceFile = result.file ?: it.lastTraceFile,
-                    recoverableError = _historyError.value,
+                    recoverableError = TRACE_FINISH_ERROR.takeIf { result.error != null },
                 )
             }
         }
         if (runtimeReady) startDiscovery()
-    }
-
-    fun deleteTrace(file: File) {
-        viewModelScope.launch {
-            val (deleted, history) = traceIo {
-                val removed = traceRecorder.deleteTrace(file)
-                removed to historySnapshot(traceRecorder.completedTraces())
-            }
-            _traceSummaries.value = history.summaries
-            _historyError.value = when {
-                !deleted -> TRACE_DELETE_ERROR
-                history.hasInvalidTrace -> HISTORY_READ_ERROR
-                else -> null
-            }
-            _state.update {
-                it.copy(
-                    lastTraceFile = history.files.firstOrNull(),
-                    recoverableError = _historyError.value,
-                )
-            }
-        }
-    }
-
-    fun deleteLocalTraces() {
-        viewModelScope.launch {
-            val history = traceIo {
-                traceRecorder.deleteAllTraces()
-                historySnapshot(traceRecorder.completedTraces())
-            }
-            _traceSummaries.value = history.summaries
-            _historyError.value = when {
-                traceRecorder.storageError != null -> TRACE_DELETE_ALL_ERROR
-                history.hasInvalidTrace -> HISTORY_READ_ERROR
-                else -> null
-            }
-            _state.update {
-                it.copy(
-                    lastTraceFile = history.files.firstOrNull(),
-                    recoverableError = _historyError.value,
-                )
-            }
-        }
     }
 
     private fun startSelectedScan(candidate: DeviceCandidate) {
@@ -889,7 +832,7 @@ class LocatorViewModel(
             )
         }
         viewModelScope.launch {
-            val result = traceIo {
+            val result = traceIo(refreshHistory = true) {
                 if (operation == traceOperation && activeTraceOperation == sessionOperation) {
                     if (sessionOperation != null) {
                         runCatching {
@@ -898,22 +841,19 @@ class LocatorViewModel(
                         }
                     }
                     activeTraceOperation = null
-                    val completed = traceRecorder.finish(
+                    traceRecorder.finish(
                         TraceOutcome.INCOMPLETE,
                         pathLengthMetres = pathLengthMetres,
                     )
-                    completed to historySnapshot(traceRecorder.completedTraces())
                 } else {
                     null
                 }
             } ?: return@launch
             if (operation != traceOperation) return@launch
-            _traceSummaries.value = result.second.summaries
-            _historyError.value = if (result.second.hasInvalidTrace) HISTORY_READ_ERROR else null
             _state.update {
                 it.copy(
-                    lastTraceFile = result.first.file ?: it.lastTraceFile,
-                    recoverableError = if (result.first.error != null) {
+                    lastTraceFile = result.file ?: it.lastTraceFile,
+                    recoverableError = if (result.error != null) {
                         "$message. $TRACE_FINISH_ERROR"
                     } else {
                         message
@@ -935,19 +875,10 @@ class LocatorViewModel(
         _state.update { it.copy(recoverableError = message, guidance = message) }
     }
 
-    private suspend fun <T> traceIo(block: () -> T): T =
-        traceMutex.withLock { withContext(ioDispatcher) { block() } }
-
-    private fun historySnapshot(files: List<File>): HistorySnapshot {
-        var invalid = false
-        val summaries = files.take(10).mapNotNull { file ->
-            runCatching { TraceSummaryReader.read(file) }.getOrElse {
-                invalid = true
-                null
-            }
-        }
-        return HistorySnapshot(files, summaries, invalid)
-    }
+    private suspend fun <T> traceIo(
+        refreshHistory: Boolean = false,
+        block: () -> T,
+    ): T = traceHistoryStore.withRecorder(refreshHistory, block)
 
     override fun onCleared() {
         ++traceOperation
@@ -957,9 +888,6 @@ class LocatorViewModel(
         stopTrackingJobs()
         poseJob?.cancel()
         arStatusJob?.cancel()
-        CoroutineScope(ioDispatcher).launch {
-            traceMutex.withLock { traceRecorder.close() }
-        }
     }
 
     private class CandidateAccumulator(initial: ScanPacket) {
@@ -1026,19 +954,10 @@ class LocatorViewModel(
         const val FAILURE_SCANNER = "SCANNER"
         const val FAILURE_TRACE_RECORDING = "TRACE_RECORDING"
         const val FAILURE_RUNTIME_REQUIREMENTS = "RUNTIME_REQUIREMENTS"
-        const val HISTORY_READ_ERROR = "Session history could not be read"
         const val TRACE_START_ERROR = "Local session recording could not start"
         const val TRACE_FINISH_ERROR = "The session could not be saved"
-        const val TRACE_DELETE_ERROR = "The session could not be deleted"
-        const val TRACE_DELETE_ALL_ERROR = "Some sessions could not be deleted"
     }
 }
-
-private data class HistorySnapshot(
-    val files: List<File>,
-    val summaries: List<TraceSummary>,
-    val hasInvalidTrace: Boolean,
-)
 
 enum class CompleteScanStartResult {
     STARTED,

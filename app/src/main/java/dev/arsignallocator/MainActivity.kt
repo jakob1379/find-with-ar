@@ -26,6 +26,7 @@ import dev.arsignallocator.monetization.BillingEntitlementController
 import dev.arsignallocator.monetization.EntitlementState
 import dev.arsignallocator.monetization.canInitializeAds
 import dev.arsignallocator.sync.SampleSynchronizer
+import dev.arsignallocator.trace.TraceHistoryStore
 import dev.arsignallocator.trace.TraceRecorder
 import dev.arsignallocator.trace.TraceSummary
 import dev.arsignallocator.ui.SignalLocatorApp
@@ -37,6 +38,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var traceDirectory: File
     private lateinit var billing: BillingEntitlementController
     private lateinit var consent: AdsConsentController
+    private lateinit var traceHistory: TraceHistoryStore
     private lateinit var viewModel: LocatorViewModel
     @Volatile
     private var effectiveCompleteScanEntitlement = EntitlementState.FREE
@@ -64,6 +66,16 @@ class MainActivity : ComponentActivity() {
             savedInstanceState?.getString(PENDING_EXPORT_PATH),
             traceDirectory,
         )
+        traceHistory = ViewModelProvider(
+            this,
+            object : ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                    require(modelClass.isAssignableFrom(TraceHistoryStore::class.java))
+                    return TraceHistoryStore(TraceRecorder(traceDirectory)) as T
+                }
+            },
+        )[TraceHistoryStore::class.java]
         val scanner = AndroidBleScanner(applicationContext)
         viewModel = ViewModelProvider(
             this,
@@ -75,7 +87,7 @@ class MainActivity : ComponentActivity() {
                         scanner = scanner,
                         locationEngine = LocalizationAdapter(),
                         synchronizer = SampleSynchronizer(),
-                        traceRecorder = TraceRecorder(traceDirectory),
+                        traceHistoryStore = traceHistory,
                         clock = ElapsedRealtimeClock,
                         appVersion = BuildConfig.VERSION_NAME,
                         deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
@@ -116,6 +128,7 @@ class MainActivity : ComponentActivity() {
             }
             SignalLocatorApp(
                 viewModel = viewModel,
+                traceHistory = traceHistory,
                 arPoseSource = arPoseSource,
                 billingState = billingState,
                 consentState = consentState,
