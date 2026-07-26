@@ -209,23 +209,18 @@ class LocatorViewModel internal constructor(
             lastTraceFile = previousTrace,
         )
         viewModelScope.launch {
-            val traceError = runCatching {
-                val ar = _state.value.arStatus
+            val traceStarted = startTrace(operation) { arState, arRecoverable ->
                 traceStore.startSingleTarget(
                     operation,
                     appVersion,
                     deviceModel,
                     candidate.handle,
-                    ar.status,
-                    ar.recoverable,
+                    arState,
+                    arRecoverable,
                     SCANNER_SINGLE_TARGET,
                 )
-            }.exceptionOrNull()?.let { TRACE_START_ERROR }
-            if (!traceStore.isCurrent(operation)) return@launch
-            _state.update {
-                it.copy(recoverableError = traceError)
             }
-            startSelectedScan(candidate)
+            if (traceStarted != null) startSelectedScan(candidate)
         }
     }
 
@@ -271,22 +266,17 @@ class LocatorViewModel internal constructor(
             lastTraceFile = previous.lastTraceFile,
         )
         viewModelScope.launch {
-            val traceError = runCatching {
-                val ar = _state.value.arStatus
+            val traceStarted = startTrace(operation) { arState, arRecoverable ->
                 traceStore.startCompleteScan(
                     operation,
                     appVersion,
                     deviceModel,
-                    ar.status,
-                    ar.recoverable,
+                    arState,
+                    arRecoverable,
                     SCANNER_COMPLETE_SCAN,
                 )
-            }.exceptionOrNull()?.let { TRACE_START_ERROR }
-            if (!traceStore.isCurrent(operation)) return@launch
-            _state.update {
-                it.copy(recoverableError = traceError)
             }
-            if (traceError == null) startCompleteScanner()
+            if (traceStarted == true) startCompleteScanner()
         }
         return CompleteScanStartResult.STARTED
     }
@@ -634,6 +624,21 @@ class LocatorViewModel internal constructor(
         } catch (_: Exception) {
             handleTraceRecordingFailure()
         }
+    }
+
+    private suspend fun startTrace(
+        operation: Long,
+        startRecording: suspend (ArRuntimeStatus, Boolean) -> Boolean,
+    ): Boolean? {
+        val ar = _state.value.arStatus
+        val traceStarted = runCatching {
+            startRecording(ar.status, ar.recoverable)
+        }.getOrDefault(false)
+        if (!traceStore.isCurrent(operation)) return null
+        _state.update {
+            it.copy(recoverableError = if (traceStarted) null else TRACE_START_ERROR)
+        }
+        return traceStarted
     }
 
     private suspend fun recordScannerState(state: String) {
