@@ -44,7 +44,11 @@ sealed class BleAvailability {
     data class PermissionDenied(val detail: String) : BleAvailability()
 }
 
-class BleScanException(message: String, val errorCode: Int? = null) : Exception(message)
+class BleScanException(
+    message: String,
+    val errorCode: Int? = null,
+    cause: Throwable? = null,
+) : Exception(message, cause)
 
 interface BleScanner {
     fun availability(): BleAvailability
@@ -190,8 +194,8 @@ class AndroidBleScanner(
             private fun emitResult(result: ScanResult) {
                 val packet = try {
                     result.toPacket(target, identities)
-                } catch (ignored: SecurityException) {
-                    close(BleScanException("Bluetooth permission was revoked"))
+                } catch (error: SecurityException) {
+                    close(BleScanException("Bluetooth permission was revoked", cause = error))
                     null
                 }
                 if (packet != null) trySend(packet)
@@ -209,9 +213,12 @@ class AndroidBleScanner(
         try {
             scanner.startScan(emptyList(), settings, callback)
         } catch (error: SecurityException) {
-            throw BleScanException("Bluetooth scan permission is missing")
+            throw BleScanException("Bluetooth scan permission is missing", cause = error)
         } catch (error: IllegalStateException) {
-            throw BleScanException(error.message ?: "Bluetooth scanner could not start")
+            throw BleScanException(
+                error.message ?: "Bluetooth scanner could not start",
+                cause = error,
+            )
         }
 
         val timeout = durationMillis?.let { duration ->
@@ -252,9 +259,14 @@ class AndroidBleScanner(
                     close(BleScanException("Android could not start Bluetooth Classic discovery"))
                 }
             } catch (error: SecurityException) {
-                close(BleScanException("Bluetooth scan permission is missing"))
+                close(BleScanException("Bluetooth scan permission is missing", cause = error))
             } catch (error: IllegalStateException) {
-                close(BleScanException(error.message ?: "Bluetooth discovery could not start"))
+                close(
+                    BleScanException(
+                        error.message ?: "Bluetooth discovery could not start",
+                        cause = error,
+                    ),
+                )
             }
         }
 
@@ -264,8 +276,8 @@ class AndroidBleScanner(
                     BluetoothDevice.ACTION_FOUND -> {
                         val packet = try {
                             intent.toClassicPacket(target, identities)
-                        } catch (_: SecurityException) {
-                            close(BleScanException("Bluetooth permission was revoked"))
+                        } catch (error: SecurityException) {
+                            close(BleScanException("Bluetooth permission was revoked", cause = error))
                             null
                         }
                         if (packet != null) {
@@ -302,7 +314,7 @@ class AndroidBleScanner(
                 appContext.registerReceiver(receiver, filter)
             }
         } catch (error: SecurityException) {
-            throw BleScanException("Bluetooth scan permission is missing")
+            throw BleScanException("Bluetooth scan permission is missing", cause = error)
         }
 
         val startJob = launch {

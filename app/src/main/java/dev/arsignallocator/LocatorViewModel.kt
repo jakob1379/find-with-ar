@@ -638,7 +638,11 @@ class LocatorViewModel internal constructor(
 
     private suspend fun recordScannerState(state: String) {
         val operation = traceStore.currentOperation() ?: return
-        runCatching { traceStore.recordScannerState(operation, state) }
+        try {
+            traceStore.recordScannerState(operation, state)
+        } catch (_: Exception) {
+            handleTraceRecordingFailure()
+        }
     }
 
     private suspend fun recordSignalState(target: TargetHandle, lost: Boolean) {
@@ -652,7 +656,11 @@ class LocatorViewModel internal constructor(
 
     private suspend fun recordRecoverableFailure(failure: String) {
         val operation = traceStore.currentOperation() ?: return
-        runCatching { traceStore.recordFailure(operation, failure) }
+        try {
+            traceStore.recordFailure(operation, failure)
+        } catch (_: Exception) {
+            handleTraceRecordingFailure()
+        }
     }
 
     private fun handleTraceRecordingFailure() {
