@@ -24,6 +24,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+private data class TraceLifecycle(
+    val latestOperation: Long = 0,
+    val activeOperation: Long? = null,
+    val recording: Boolean = false,
+)
+
 internal class TraceStore(
     private val recorder: TraceRecorder,
     private val clock: MonotonicClock,
@@ -36,11 +42,7 @@ internal class TraceStore(
     val error: StateFlow<String?> = _error.asStateFlow()
     private var initialized = false
     @Volatile
-    private var latestOperation = 0L
-    @Volatile
-    private var activeOperation: Long? = null
-    @Volatile
-    private var recording = false
+    private var lifecycle = TraceLifecycle()
     private var tracedArState: ArRuntimeStatus? = null
     private var tracedScannerState: String? = null
     private val tracedEstimatorStates =
@@ -66,22 +68,31 @@ internal class TraceStore(
 
     @Synchronized
     fun prepareStart(): Long {
-        recording = false
-        return ++latestOperation
+        val operation = lifecycle.latestOperation + 1
+        lifecycle = lifecycle.copy(latestOperation = operation, recording = false)
+        return operation
     }
 
     @Synchronized
     fun prepareStop(): TraceStopToken {
-        recording = false
-        return TraceStopToken(activeOperation, ++latestOperation)
+        val operation = lifecycle.latestOperation + 1
+        val stop = TraceStopToken(lifecycle.activeOperation, operation)
+        lifecycle = lifecycle.copy(latestOperation = operation, recording = false)
+        return stop
     }
 
-    fun isCurrent(operation: Long): Boolean = latestOperation == operation
+    fun isCurrent(operation: Long): Boolean = lifecycle.latestOperation == operation
 
-    fun currentOperation(): Long? = activeOperation.takeIf { recording }
+    fun currentOperation(): Long? {
+        val current = lifecycle
+        return current.activeOperation.takeIf { current.recording }
+    }
 
+    @Synchronized
     fun disable(operation: Long) {
-        if (activeOperation == operation) recording = false
+        if (lifecycle.activeOperation == operation) {
+            lifecycle = lifecycle.copy(recording = false)
+        }
     }
 
     suspend fun startSingleTarget(
@@ -167,20 +178,13 @@ internal class TraceStore(
         pathLengthMetres: Double = 0.0,
         failure: String? = null,
     ): TraceFinalizationResult = withRecorder(refreshHistory = true) {
-        val session = stop.sessionOperation
-        if (
-            session != null && activeOperation != session ||
-            session == null && (!isCurrent(stop.operation) || activeOperation != null)
-        ) {
-            return@withRecorder TraceFinalizationResult()
-        }
+        if (!detach(stop)) return@withRecorder TraceFinalizationResult()
         runCatching {
             failure?.let {
                 recordEvent(TraceEventCode.RECOVERABLE_FAILURE, detail = it)
             }
             recordScannerState(SCANNER_STOPPED)
         }
-        activeOperation = null
         recorder.finish(outcome, reason, note, pathLengthMetres)
     }
 
@@ -193,11 +197,7 @@ internal class TraceStore(
     ): Boolean = withRecorder {
         if (!isCurrent(operation)) return@withRecorder false
         startRecorder()
-        if (!isCurrent(operation)) {
-            return@withRecorder false
-        }
-        activeOperation = operation
-        recording = true
+        if (!activate(operation)) return@withRecorder false
         tracedArState = null
         tracedScannerState = null
         tracedEstimatorStates.clear()
@@ -207,8 +207,32 @@ internal class TraceStore(
         true
     }
 
-    private fun matches(operation: Long): Boolean =
-        recording && operation == activeOperation
+    private fun matches(operation: Long): Boolean {
+        val current = lifecycle
+        return current.recording && operation == current.activeOperation
+    }
+
+    @Synchronized
+    private fun activate(operation: Long): Boolean {
+        if (!isCurrent(operation)) return false
+        lifecycle = lifecycle.copy(activeOperation = operation, recording = true)
+        return true
+    }
+
+    @Synchronized
+    private fun detach(stop: TraceStopToken): Boolean {
+        val current = lifecycle
+        val session = stop.sessionOperation
+        if (
+            session != null && current.activeOperation != session ||
+            session == null &&
+            (current.latestOperation != stop.operation || current.activeOperation != null)
+        ) {
+            return false
+        }
+        lifecycle = current.copy(activeOperation = null, recording = false)
+        return true
+    }
 
     private fun recordArState(state: ArRuntimeStatus, recoverable: Boolean) {
         if (tracedArState == state) return
