@@ -4,6 +4,7 @@ kotlin = "2.3.10"
 compose-bom = "2026.06.00"
 activity = "1.13.0"
 lifecycle = "2.11.0"
+fragment = "1.8.9"
 coroutines = "1.10.2"
 arcore = "1.54.0"
 billing = "9.1.0"
@@ -23,6 +24,7 @@ compose-foundation = { module = "androidx.compose.foundation:foundation" }
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
 lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 arcore = { module = "com.google.ar:core", version.ref = "arcore" }
