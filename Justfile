@@ -6,6 +6,7 @@ bootstrap-wrapper:
     chmod +x gradlew
 
 check:
+    nix fmt -- --check flake.nix
     ./gradlew --no-daemon :localization:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
     uv sync --locked --project analysis
     uv run --project analysis pytest

@@ -6,8 +6,10 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { nixpkgs, flake-utils, ... }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" ] (system:
+  outputs =
+    { nixpkgs, flake-utils, ... }:
+    flake-utils.lib.eachSystem [ "x86_64-linux" ] (
+      system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -30,20 +32,24 @@
 
         android = pkgs.androidenv.composeAndroidPackages baseAndroidArgs;
 
-        androidWithEmulator = pkgs.androidenv.composeAndroidPackages
-          (baseAndroidArgs // {
+        androidWithEmulator = pkgs.androidenv.composeAndroidPackages (
+          baseAndroidArgs
+          // {
             platformVersions = [ "37.0" ];
             includeEmulator = true;
             emulatorVersion = "latest";
             includeSystemImages = true;
             systemImageTypes = [ "google_apis" ];
             abiVersions = [ "x86_64" ];
-          });
+          }
+        );
 
-        mkAndroidShell = composition: extraPackages:
+        mkAndroidShell =
+          composition: extraPackages:
           let
             sdkRoot = "${composition.androidsdk}/libexec/android-sdk";
-          in pkgs.mkShell {
+          in
+          pkgs.mkShell {
             packages = [
               pkgs.binutils
               pkgs.curl
@@ -56,7 +62,8 @@
               pkgs.unzip
               pkgs.uv
               composition.androidsdk
-            ] ++ extraPackages;
+            ]
+            ++ extraPackages;
 
             JAVA_HOME = pkgs.jdk17_headless.home;
             ANDROID_HOME = sdkRoot;
@@ -70,11 +77,14 @@
               export GRADLE_USER_HOME="$PWD/.gradle-home"
             '';
           };
-      in {
+      in
+      {
+        formatter = pkgs.nixfmt;
         devShells.default = mkAndroidShell android [ ];
         devShells.ci = mkAndroidShell androidWithEmulator [ ];
         devShells.ide = mkAndroidShell androidWithEmulator [
           (pkgs.android-studio.withSdk androidWithEmulator.androidsdk)
         ];
-      });
+      }
+    );
 }
