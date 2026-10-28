@@ -68,6 +68,7 @@
             JAVA_HOME = pkgs.jdk17_headless.home;
             ANDROID_HOME = sdkRoot;
             ANDROID_SDK_ROOT = sdkRoot;
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
             GRADLE_OPTS =
               "-Dorg.gradle.project.android.aapt2FromMavenOverride="
               + "${sdkRoot}/build-tools/${buildToolsVersion}/aapt2";
