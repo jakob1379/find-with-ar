@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" width="960" height="420" role="img" aria-labelledby="t d">
+<title id="t">AR Signal Locator: from RSSI readings to a located region</title>
+<desc id="d">Top-down room plan with a probability grid. A phone walks a straight line, leaving two mirror-image likely regions; after it turns, the grid collapses to one dominant region with a 90% ellipse. A side list moves through the states Signal found, Collecting and Located.</desc>
+<style>
+:root{--bg:#f3f7f6;--ink:#073b4c;--muted:#4f6d77;--grid:#d3e1e0;--wall:#073b4c;--furn:#b9cfcf;--path:#118ab2;--heat:#ef476f}
+@media (prefers-color-scheme:dark){:root{--bg:#04222c;--ink:#e3f0ef;--muted:#93b3b9;--grid:#123f4c;--wall:#cfe4e3;--furn:#24576a;--path:#4cc3e8;--heat:#ff6b8b}}
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;fill:var(--ink)}
+.bg{fill:var(--bg)}
+.cells{fill:none;stroke:var(--grid);stroke-width:1}
+.wall{fill:none;stroke:var(--wall);stroke-width:4;stroke-linecap:square}
+.furn{fill:none;stroke:var(--furn);stroke-width:2}
+.heat{fill:var(--heat)}
+.stop0{stop-color:var(--heat);stop-opacity:.9}
+.stop1{stop-color:var(--heat);stop-opacity:0}
+.trail{fill:none;stroke:var(--path);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:450;stroke-dashoffset:0}
+.dev{fill:var(--path)}
+.cone{fill:var(--path);opacity:.2}
+.pulse{fill:none;stroke:var(--path);stroke-width:1.5;vector-effect:non-scaling-stroke;transform-box:fill-box;transform-origin:center;opacity:.35;transform:scale(2.6)}
+.ell{fill:none;stroke:var(--ink);stroke-width:2;stroke-dasharray:252;stroke-dashoffset:0}
+.mark{fill:var(--ink)}
+.small{font-size:12px;fill:var(--muted)}
+.h{font-size:17px;font-weight:600}
+.c{font-size:13px;fill:var(--muted)}
+.rail{stroke:var(--grid);stroke-width:2}
+.node{fill:var(--bg);stroke:var(--ink);stroke-width:2}
+.row{opacity:.55}
+.s3{opacity:1}
+.lgd{font-size:12.5px;fill:var(--muted)}
+.layA,.layB{opacity:0}
+.layC,.scene,.marker,.ellabel{opacity:1}
+.marker{transform-box:fill-box;transform-origin:center}
+.phone{transform:translate(250px,90px) rotate(-180deg)}
+@media (prefers-reduced-motion:no-preference){
+.scene{animation:scene 14s linear infinite}
+.layA{animation:layA 14s linear infinite}
+.layB{animation:layB 14s ease-in-out infinite}
+.layC{animation:layC 14s ease-in-out infinite}
+.trail{animation:trail 14s linear infinite}
+.phone{animation:phone 14s linear infinite}
+.pulse{animation:pulse 1.4s ease-out infinite}
+.ell{animation:ell 14s ease-in-out infinite}
+.marker{animation:mark 14s ease-out infinite}
+.ellabel{animation:lab 14s linear infinite}
+.s1{animation:s1 14s ease-in-out infinite}
+.s2{animation:s2 14s ease-in-out infinite}
+.s3{animation:s3 14s ease-in-out infinite}
+}
+@keyframes scene{0%{opacity:0}3%{opacity:1}94%{opacity:1}98%,100%{opacity:0}}
+@keyframes layA{0%{opacity:0}4%{opacity:1}18%{opacity:1}30%,100%{opacity:0}}
+@keyframes layB{0%,14%{opacity:0}32%{opacity:1}50%{opacity:1}60%,100%{opacity:0}}
+@keyframes layC{0%,52%{opacity:0}64%,100%{opacity:1}}
+@keyframes trail{0%,6%{stroke-dashoffset:450}40%,42%{stroke-dashoffset:210}58%,60%{stroke-dashoffset:80}68%,100%{stroke-dashoffset:0}}
+@keyframes phone{
+0%,6%{transform:translate(90px,220px) rotate(0deg)}
+40%{transform:translate(330px,220px) rotate(0deg)}
+42%{transform:translate(330px,220px) rotate(-90deg)}
+58%{transform:translate(330px,90px) rotate(-90deg)}
+60%{transform:translate(330px,90px) rotate(-180deg)}
+68%,100%{transform:translate(250px,90px) rotate(-180deg)}}
+@keyframes pulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(5.5);opacity:0}}
+@keyframes ell{0%,62%{stroke-dashoffset:252}74%,100%{stroke-dashoffset:0}}
+@keyframes mark{0%,71%{opacity:0;transform:scale(.3)}76%,100%{opacity:1;transform:scale(1)}}
+@keyframes lab{0%,73%{opacity:0}78%,100%{opacity:1}}
+@keyframes s1{0%{opacity:.4}3%,12%{opacity:1}16%,100%{opacity:.4}}
+@keyframes s2{0%,12%{opacity:.4}16%,56%{opacity:1}60%,100%{opacity:.4}}
+@keyframes s3{0%,58%{opacity:.4}62%,93%{opacity:1}97%,100%{opacity:.4}}
+</style>
+<defs>
+<pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse" x="40" y="40"><path class="cells" d="M20 0H0V20"/></pattern>
+<pattern id="cellmask" width="20" height="20" patternUnits="userSpaceOnUse" x="40" y="40"><rect x="1.5" y="1.5" width="17" height="17" fill="#fff"/></pattern>
+<mask id="cellsm" maskUnits="userSpaceOnUse" x="40" y="40" width="520" height="340"><rect x="40" y="40" width="520" height="340" fill="url(#cellmask)"/></mask>
+<radialGradient id="blob"><stop offset="0" class="stop0"/><stop offset="1" class="stop1"/></radialGradient>
+</defs>
+<rect class="bg" width="960" height="420"/>
+<rect x="40" y="40" width="520" height="340" fill="url(#grid)"/>
+<g class="furn">
+<rect x="58" y="318" width="132" height="46" rx="8"/>
+<rect x="498" y="196" width="44" height="130" rx="3"/>
+<circle cx="160" cy="140" r="28"/>
+</g>
+<g class="scene">
+<g mask="url(#cellsm)">
+<rect class="heat layA" x="40" y="40" width="520" height="340" fill-opacity=".14"/>
+<g class="layB">
+<ellipse cx="410" cy="110" rx="130" ry="72" fill="url(#blob)"/>
+<ellipse cx="410" cy="330" rx="130" ry="72" fill="url(#blob)"/>
+</g>
+<ellipse class="layC" cx="410" cy="110" rx="78" ry="56" fill="url(#blob)"/>
+</g>
+<path class="trail" d="M90 220H330V90H250"/>
+<ellipse class="ell" cx="410" cy="110" rx="46" ry="32" transform="rotate(-15 410 110)"/>
+<g class="marker">
+<circle class="mark" cx="410" cy="110" r="5"/>
+<path d="M410 94v8M410 118v8M394 110h8M418 110h8" stroke="var(--ink)" stroke-width="2"/>
+</g>
+<text class="small ellabel" x="462" y="76">90% region</text>
+<g class="phone">
+<circle class="pulse" r="8"/>
+<path class="cone" d="M0 0L30-14A33 33 0 0 1 30 14Z"/>
+<circle class="dev" r="7"/>
+</g>
+</g>
+<path class="wall" d="M40 40H560V380H300M240 380H40V40"/>
+<line class="rail" x1="616" y1="74" x2="616" y2="254"/>
+<g class="row s1"><circle class="node" cx="616" cy="74" r="8"/><text class="h" x="640" y="80">Signal found</text><text class="c" x="640" y="100">RSSI is arriving; the path has no spread yet.</text></g>
+<g class="row s2"><circle class="node" cx="616" cy="164" r="8"/><text class="h" x="640" y="170">Collecting</text><text class="c" x="640" y="190">The grid keeps every likely region. A straight</text><text class="c" x="640" y="207">walk leaves two mirror images.</text></g>
+<g class="row s3"><circle class="node" cx="616" cy="254" r="8"/><text class="h" x="640" y="260">Located</text><text class="c" x="640" y="280">Turning breaks the tie: one dominant region</text><text class="c" x="640" y="297">with its 90% ellipse.</text></g>
+<g transform="translate(608 336)">
+<rect width="16" height="16" rx="2" class="heat" fill-opacity=".55"/><text class="lgd" x="28" y="12.5">Posterior over the floor grid</text>
+<path d="M0 34H16" stroke="var(--path)" stroke-width="2.5" stroke-linecap="round"/><circle cx="16" cy="34" r="4.5" class="dev"/><text class="lgd" x="28" y="38.5">Phone path from ARCore poses</text>
+</g>
+</svg>
